@@ -370,7 +370,7 @@ nononame(const char *name)
 static int
 print_jail(int pflags, int jflags)
 {
-	char *nname;
+	char *nname, *xo_nname;
 	char **param_values;
 	int i, ai, jid, count, n, spc;
 	char ipbuf[INET6_ADDRSTRLEN];
@@ -472,16 +472,27 @@ print_jail(int pflags, int jflags)
 				 */
 				if (params[i].jp_flags &
 				    (JP_BOOL | JP_NOBOOL)) {
-					if (*(int *)params[i].jp_value)
-						xo_emit("{:/%s}", params[i].jp_name);
+					if (*(int *)params[i].jp_value) {
+						asprintf(&xo_nname, "{en:%s/true}", params[i].jp_name);
+						xo_emit(xo_nname);
+						xo_emit("{d:/%s}", params[i].jp_name);
+					}
 					else {
 						nname = (params[i].jp_flags &
 						    JP_NOBOOL) ?
 						    nononame(params[i].jp_name)
 						    : noname(params[i].jp_name);
-						xo_emit("{:/%s}", nname);
+						if (params[i].jp_flags & JP_NOBOOL) {
+							asprintf(&xo_nname, "{en:%s/true}", params[i].jp_name);
+							xo_emit(xo_nname);
+						} else {
+							asprintf(&xo_nname, "{en:%s/false}", params[i].jp_name);
+							xo_emit(xo_nname);
+						}
+						xo_emit("{d:/%s}", nname);
 						free(nname);
 					}
+					free(xo_nname);
 					continue;
 				}
 				xo_emit("{d:%s}=", params[i].jp_name);
