@@ -2,6 +2,7 @@
  * Copyright (c) 2003 Mike Barcroft <mike@FreeBSD.org>
  * Copyright (c) 2008 Bjoern A. Zeeb <bz@FreeBSD.org>
  * Copyright (c) 2009 James Gritton <jamie@FreeBSD.org>
+ * Copyright (c) 2015 Emmanuel Vadot <manu@bocal.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -74,7 +75,7 @@ static int sort_param(const void *a, const void *b);
 static char *noname(const char *name);
 static char *nononame(const char *name);
 static int print_jail(int pflags, int jflags);
-static void quoted_print(char *str);
+static void quoted_print(int pflags, char *name, char *value);
 
 int
 main(int argc, char **argv)
@@ -491,7 +492,7 @@ print_jail(int pflags, int jflags)
 				else if (!(pflags & PRINT_NAMEVAL))
 					xo_emit("-");
 			} else {
-				quoted_print(param_values[i]);
+				quoted_print(pflags, params[i].jp_name, param_values[i]);
 			}
 		}
 		xo_emit("\n");
@@ -505,32 +506,31 @@ print_jail(int pflags, int jflags)
 }
 
 static void
-quoted_print(char *str)
+quoted_print(int pflags, char *name, char *value)
 {
-	int c, qc;
-	char *p = str;
+	int qc;
+	char *p = value;
+	char *param_name_value;
 
-	/* An empty string needs quoting. */
+	asprintf(&param_name_value, "{:%s/%%s}", name);
+
 	if (!*p) {
-		xo_emit("{:/%s}", "\"\"");
+		xo_emit(param_name_value, "\"\"");
 		return;
 	}
 
-	/*
-	 * The value will be surrounded by quotes if it contains spaces
-	 * or quotes.
-	 */
 	qc = strchr(p, '\'') ? '"'
-	    : strchr(p, '"') ? '\''
-	    : strchr(p, ' ') || strchr(p, '\t') ? '"'
-	    : 0;
-	if (qc)
-		xo_emit("{:/%c}", qc);
-	while ((c = *p++)) {
-		if (c == '\\' || c == qc)
-			xo_emit("{:/%c}", "\\");
-		xo_emit("{:/%c}", c);
-	}
-	if (qc)
-		xo_emit("{:/%c}", qc);
+		: strchr(p, '"') ? '\''
+		: strchr(p, ' ') || strchr(p, '\t') ? '"'
+		: 0;
+
+	if (qc && pflags & PRINT_QUOTED)
+		xo_emit("{P:/%c}", qc);
+
+	xo_emit(param_name_value, value);
+
+	free(param_name_value);
+
+	if (qc && pflags & PRINT_QUOTED)
+		xo_emit("{P:/%c}", qc);
 }
