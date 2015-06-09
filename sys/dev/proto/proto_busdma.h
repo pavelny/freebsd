@@ -29,14 +29,37 @@
 #ifndef _DEV_PROTO_BUSDMA_H_
 #define _DEV_PROTO_BUSDMA_H_
 
+struct proto_md;
+
 struct proto_tag {
-	LIST_ENTRY(proto_tag)	link;
+	LIST_ENTRY(proto_tag)	tags;
 	struct proto_tag	*parent;
-	bus_dma_tag_t		busdma_tag;
+	LIST_ENTRY(proto_tag)	peers;
+	LIST_HEAD(,proto_tag)	children;
+	LIST_HEAD(,proto_md)	mds;
+	bus_addr_t		align;
+	bus_addr_t		bndry;
+	bus_addr_t		maxaddr;
+	bus_size_t		maxsz;
+	bus_size_t		maxsegsz;
+	u_int			nsegs;
+	u_int			datarate;
+};
+
+struct proto_md {
+	LIST_ENTRY(proto_md)	mds;
+	LIST_ENTRY(proto_md)	peers;
+	struct proto_tag	*tag;
+	void			*virtaddr;
+	vm_paddr_t		physaddr;
+	bus_dma_tag_t		bd_tag;
+	bus_dmamap_t		bd_map;
 };
 
 struct proto_busdma {
 	LIST_HEAD(,proto_tag)	tags;
+	LIST_HEAD(,proto_md)	mds;
+	bus_dma_tag_t		bd_roottag;
 };
 
 struct proto_busdma *proto_busdma_attach(struct proto_softc *);
@@ -46,5 +69,7 @@ int proto_busdma_cleanup(struct proto_softc *, struct proto_busdma *);
 
 int proto_busdma_ioctl(struct proto_softc *, struct proto_busdma *,
     struct proto_ioc_busdma *);
+
+int proto_busdma_mmap_allowed(struct proto_busdma *, vm_paddr_t);
 
 #endif /* _DEV_PROTO_BUSDMA_H_ */
