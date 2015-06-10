@@ -523,12 +523,15 @@ quoted_print(int pflags, char *name, char *value)
 	char *p = value;
 	char *param_name_value;
 
-	asprintf(&param_name_value, "{:%s/%%s}", name);
 
 	if (!*p) {
-		xo_emit(param_name_value, "\"\"");
+		asprintf(&param_name_value, "{k:%s}{d:%s/\"\"}", name, name);
+		xo_emit(param_name_value);
+		free(param_name_value);
 		return;
 	}
+
+	asprintf(&param_name_value, "{:%s/%%s}", name);
 
 	qc = strchr(p, '\'') ? '"'
 		: strchr(p, '"') ? '\''
