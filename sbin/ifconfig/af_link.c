@@ -47,6 +47,8 @@ static const char rcsid[] =
 #include <net/if_types.h>
 #include <net/ethernet.h>
 
+#include <libxo/xo.h>
+
 #include "ifconfig.h"
 
 static struct ifreq link_ridreq;
@@ -62,12 +64,12 @@ link_status(int s __unused, const struct ifaddrs *ifa)
 		    sdl->sdl_type == IFT_L2VLAN ||
 		    sdl->sdl_type == IFT_BRIDGE) &&
 		    sdl->sdl_alen == ETHER_ADDR_LEN)
-			printf("\tether %s\n",
+			xo_emit("{P:\tether }{:ether/%s}{P:\n}",
 			    ether_ntoa((struct ether_addr *)LLADDR(sdl)));
 		else {
 			int n = sdl->sdl_nlen > 0 ? sdl->sdl_nlen + 1 : 0;
 
-			printf("\tlladdr %s\n", link_ntoa(sdl) + n);
+			xo_emit("{P:\tlladdr }{:lladdr/%s}{P:\n}", link_ntoa(sdl) + n);
 		}
 	}
 }

@@ -35,7 +35,7 @@ SRCS+=	ifgre.c			# GRE keys etc
 SRCS+=	ifgif.c			# GIF reversed header workaround
 
 SRCS+=	sfp.c			# SFP/SFP+ information
-LIBADD+=	m
+LIBADD+=	m xo
 
 SRCS+=	ifieee80211.c regdomain.c # SIOC[GS]IEEE80211 support
 LIBADD+=	bsdxml sbuf

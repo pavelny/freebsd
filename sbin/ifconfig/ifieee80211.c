@@ -2026,8 +2026,8 @@ regdomain_addchans(struct ieee80211req_chaninfo *ci,
 		b = nb->band;
 		if (verbose) {
 			printf("%s:", __func__);
-			printb(" chanFlags", chanFlags, IEEE80211_CHAN_BITS);
-			printb(" bandFlags", nb->flags | b->flags,
+			printb(" ", "chanFlags", chanFlags, IEEE80211_CHAN_BITS);
+			printb(" ", "bandFlags", nb->flags | b->flags,
 			    IEEE80211_CHAN_BITS);
 			putchar('\n');
 		}
@@ -2073,7 +2073,7 @@ regdomain_addchans(struct ieee80211req_chaninfo *ci,
 			if (!checkchan(avail, freq, flags)) {
 				if (verbose) {
 					printf("%u: skip, ", freq);
-					printb("flags", flags,
+					printb(NULL, "flags", flags,
 					    IEEE80211_CHAN_BITS);
 					printf(" not available\n");
 				}
@@ -2121,7 +2121,7 @@ regdomain_addchans(struct ieee80211req_chaninfo *ci,
 			if (verbose) {
 				printf("[%3d] add freq %u ",
 				    ci->ic_nchans-1, c->ic_freq);
-				printb("flags", c->ic_flags, IEEE80211_CHAN_BITS);
+				printb(NULL, "flags", c->ic_flags, IEEE80211_CHAN_BITS);
 				printf(" power %u\n", c->ic_maxregpower);
 			}
 			/* NB: kernel fills in other fields */
@@ -3686,14 +3686,14 @@ list_capabilities(int s)
 		errx(1, "no space for device capabilities");
 	dc->dc_chaninfo.ic_nchans = verbose ? MAXCHAN : 1;
 	getdevcaps(s, dc);
-	printb("drivercaps", dc->dc_drivercaps, IEEE80211_C_BITS);
+	printb(NULL, "drivercaps", dc->dc_drivercaps, IEEE80211_C_BITS);
 	if (dc->dc_cryptocaps != 0 || verbose) {
 		putchar('\n');
-		printb("cryptocaps", dc->dc_cryptocaps, IEEE80211_CRYPTO_BITS);
+		printb(NULL, "cryptocaps", dc->dc_cryptocaps, IEEE80211_CRYPTO_BITS);
 	}
 	if (dc->dc_htcaps != 0 || verbose) {
 		putchar('\n');
-		printb("htcaps", dc->dc_htcaps, IEEE80211_HTCAP_BITS);
+		printb(NULL, "htcaps", dc->dc_htcaps, IEEE80211_HTCAP_BITS);
 	}
 	putchar('\n');
 	if (verbose) {

@@ -247,7 +247,7 @@ lagg_status(int s)
 		putchar('\n');
 		if (verbose) {
 			printf("\tlagg options:\n");
-			printb("\t\tflags", ro.ro_opts, LAGG_OPT_BITS);
+			printb("\t\t", "flags", ro.ro_opts, LAGG_OPT_BITS);
 			putchar('\n');
 			printf("\t\tflowid_shift: %d\n", ro.ro_flowid_shift);
 			printf("\tlagg statistics:\n");
@@ -262,9 +262,9 @@ lagg_status(int s)
 		for (i = 0; i < ra.ra_ports; i++) {
 			lp = (struct lacp_opreq *)&rpbuf[i].rp_lacpreq;
 			printf("\tlaggport: %s ", rpbuf[i].rp_portname);
-			printb("flags", rpbuf[i].rp_flags, LAGG_PORT_BITS);
+			printb(NULL, "flags", rpbuf[i].rp_flags, LAGG_PORT_BITS);
 			if (verbose && ra.ra_proto == LAGG_PROTO_LACP)
-				printb(" state", lp->actor_state,
+				printb(" ", "state", lp->actor_state,
 				    LACP_STATE_BITS);
 			putchar('\n');
 			if (verbose && ra.ra_proto == LAGG_PROTO_LACP)

@@ -73,6 +73,7 @@ static const char rcsid[] =
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <libxo/xo.h>
 
 #include "ifconfig.h"
 
@@ -248,7 +249,7 @@ sortifaddrs(struct ifaddrs *list,
     struct ifa_queue *q)
 {
 	struct ifaddrs *right, *temp, *last, *result, *next, *tail;
-	
+
 	right = list;
 	temp = list;
 	last = list;
@@ -314,6 +315,10 @@ main(int argc, char *argv[])
 	size_t iflen;
 
 	all = downonly = uponly = namesonly = noload = verbose = 0;
+
+	argc = xo_parse_args(argc, argv);
+	if (argc < 0)
+		exit(1);
 
 	/* Parse leading line options */
 	strlcpy(options, "adklmnuv", sizeof(options));
@@ -445,16 +450,17 @@ main(int argc, char *argv[])
 		err(EXIT_FAILURE, "getifaddrs");
 
 	cp = NULL;
-	
+
 	if (calcorders(ifap, &q) != 0)
 		err(EXIT_FAILURE, "calcorders");
-		
+
 	sifap = sortifaddrs(ifap, cmpifaddrs, &q);
 
 	TAILQ_FOREACH_SAFE(cur, &q, link, tmp)
 		free(cur);
 
 	ifindex = 0;
+	xo_open_list("interfaces");
 	for (ifa = sifap; ifa; ifa = ifa->ifa_next) {
 		memset(&paifr, 0, sizeof(paifr));
 		strncpy(paifr.ifr_name, ifa->ifa_name, sizeof(paifr.ifr_name));
@@ -501,7 +507,7 @@ main(int argc, char *argv[])
 					    sdl->sdl_alen != ETHER_ADDR_LEN)
 						continue;
 				} else {
-					if (ifa->ifa_addr->sa_family 
+					if (ifa->ifa_addr->sa_family
 					    != afp->af_af)
 						continue;
 				}
@@ -509,8 +515,10 @@ main(int argc, char *argv[])
 			namecp = cp;
 			ifindex++;
 			if (ifindex > 1)
-				printf(" ");
-			fputs(name, stdout);
+				xo_emit("{P: }");
+			xo_open_instance("interfaces");
+			xo_emit("{:ifname}", name);
+			xo_close_instance("interfaces");
 			continue;
 		}
 		ifindex++;
@@ -521,8 +529,11 @@ main(int argc, char *argv[])
 			status(afp, sdl, ifa);
 	}
 	if (namesonly)
-		printf("\n");
+		xo_emit("\n");
 	freeifaddrs(ifap);
+
+	xo_close_list("interfaces");
+	xo_finish();
 
 	exit(0);
 }
@@ -929,7 +940,7 @@ notealias(const char *addr, int param, int s, const struct afswtch *afp)
 
 /*ARGSUSED*/
 static void
-setifdstaddr(const char *addr, int param __unused, int s, 
+setifdstaddr(const char *addr, int param __unused, int s,
     const struct afswtch *afp)
 {
 	if (afp->af_getaddr != NULL)
@@ -989,7 +1000,7 @@ setifcap(const char *vname, int value, int s, const struct afswtch *afp)
 }
 
 static void
-setifmetric(const char *val, int dummy __unused, int s, 
+setifmetric(const char *val, int dummy __unused, int s,
     const struct afswtch *afp)
 {
 	strncpy(ifr.ifr_name, name, sizeof (ifr.ifr_name));
@@ -999,7 +1010,7 @@ setifmetric(const char *val, int dummy __unused, int s,
 }
 
 static void
-setifmtu(const char *val, int dummy __unused, int s, 
+setifmtu(const char *val, int dummy __unused, int s,
     const struct afswtch *afp)
 {
 	strncpy(ifr.ifr_name, name, sizeof (ifr.ifr_name));
@@ -1009,7 +1020,7 @@ setifmtu(const char *val, int dummy __unused, int s,
 }
 
 static void
-setifname(const char *val, int dummy __unused, int s, 
+setifname(const char *val, int dummy __unused, int s,
     const struct afswtch *afp)
 {
 	char *newname;
@@ -1031,7 +1042,7 @@ setifname(const char *val, int dummy __unused, int s,
 
 /* ARGSUSED */
 static void
-setifdescr(const char *val, int dummy __unused, int s, 
+setifdescr(const char *val, int dummy __unused, int s,
     const struct afswtch *afp)
 {
 	char *newdescr;
@@ -1085,6 +1096,7 @@ status(const struct afswtch *afp, const struct sockaddr_dl *sdl,
 	struct ifaddrs *ift;
 	int allfamilies, s;
 	struct ifstat ifs;
+	const char *last_list = NULL;
 
 	if (afp == NULL) {
 		allfamilies = 1;
@@ -1100,13 +1112,15 @@ status(const struct afswtch *afp, const struct sockaddr_dl *sdl,
 	if (s < 0)
 		err(1, "socket(family %u,SOCK_DGRAM)", ifr.ifr_addr.sa_family);
 
-	printf("%s: ", name);
-	printb("flags", ifa->ifa_flags, IFFBITS);
-	if (ioctl(s, SIOCGIFMETRIC, &ifr) != -1)
-		printf(" metric %d", ifr.ifr_metric);
+	xo_open_instance("interfaces");
+	xo_emit("{:ifname}{P:: }", name);
+	printb(NULL, "flags", ifa->ifa_flags, IFFBITS);
+	if (ioctl(s, SIOCGIFMETRIC, &ifr) != -1) {
+		xo_emit("{P: metric }{:metric/%d}", ifr.ifr_metric);
+	}
 	if (ioctl(s, SIOCGIFMTU, &ifr) != -1)
-		printf(" mtu %d", ifr.ifr_mtu);
-	putchar('\n');
+		xo_emit("{P: mtu }{:mtu/%d}", ifr.ifr_mtu);
+	xo_emit("{P:\n}");
 
 	for (;;) {
 		if ((descr = reallocf(descr, descrlen)) != NULL) {
@@ -1115,8 +1129,7 @@ status(const struct afswtch *afp, const struct sockaddr_dl *sdl,
 			if (ioctl(s, SIOCGIFDESCR, &ifr) == 0) {
 				if (ifr.ifr_buffer.buffer == descr) {
 					if (strlen(descr) > 0)
-						printf("\tdescription: %s\n",
-						    descr);
+						xo_emit("{P:\t}{:description}", descr);
 				} else if (ifr.ifr_buffer.length > descrlen) {
 					descrlen = ifr.ifr_buffer.length;
 					continue;
@@ -1130,12 +1143,12 @@ status(const struct afswtch *afp, const struct sockaddr_dl *sdl,
 
 	if (ioctl(s, SIOCGIFCAP, (caddr_t)&ifr) == 0) {
 		if (ifr.ifr_curcap != 0) {
-			printb("\toptions", ifr.ifr_curcap, IFCAPBITS);
-			putchar('\n');
+			printb("\t", "options", ifr.ifr_curcap, IFCAPBITS);
+			xo_emit("{P:\n}");
 		}
 		if (supmedia && ifr.ifr_reqcap != 0) {
-			printb("\tcapabilities", ifr.ifr_reqcap, IFCAPBITS);
-			putchar('\n');
+			printb("\t", "capabilities", ifr.ifr_reqcap, IFCAPBITS);
+			xo_emit("{P:\n}");
 		}
 	}
 
@@ -1149,11 +1162,23 @@ status(const struct afswtch *afp, const struct sockaddr_dl *sdl,
 		if (allfamilies) {
 			const struct afswtch *p;
 			p = af_getbyfamily(ift->ifa_addr->sa_family);
-			if (p != NULL && p->af_status != NULL)
+			if (p != NULL && p->af_status != NULL) {
+				if (last_list && strcmp(last_list, p->af_name) != 0) {
+					xo_close_list(last_list);
+					xo_open_list(p->af_name);
+					last_list = p->af_name;
+				} else if (!last_list) {
+					xo_open_list(p->af_name);
+					last_list = p->af_name;
+				}
 				p->af_status(s, ift);
-		} else if (afp->af_af == ift->ifa_addr->sa_family)
+			}
+		} else if (afp->af_af == ift->ifa_addr->sa_family) {
 			afp->af_status(s, ift);
+		}
 	}
+	if (last_list)
+		xo_close_list(last_list);
 #if 0
 	if (allfamilies || afp->af_af == AF_LINK) {
 		const struct afswtch *lafp;
@@ -1177,13 +1202,14 @@ status(const struct afswtch *afp, const struct sockaddr_dl *sdl,
 		afp->af_other_status(s);
 
 	strncpy(ifs.ifs_name, name, sizeof ifs.ifs_name);
-	if (ioctl(s, SIOCGIFSTATUS, &ifs) == 0) 
-		printf("%s", ifs.ascii);
+	if (ioctl(s, SIOCGIFSTATUS, &ifs) == 0)
+		xo_emit("{:status/%s}", ifs.ascii);
 
 	if (verbose > 0)
 		sfp_status(s, &ifr, verbose);
 
 	close(s);
+	xo_close_instance("interfaces");
 	return;
 }
 
@@ -1215,30 +1241,41 @@ Perror(const char *cmd)
  * Print a value a la the %b format of the kernel's printf
  */
 void
-printb(const char *s, unsigned v, const char *bits)
+printb(const char *prefix, const char *s, unsigned v, const char *bits)
 {
 	int i, any = 0;
 	char c;
+	char *xo_print;
+	char p_bits[256];
+	int  j;
 
 	if (bits && *bits == 8)
-		printf("%s=%o", s, v);
+		asprintf(&xo_print, "{P:%s%s=%o}", prefix ? prefix : "", s, v);
 	else
-		printf("%s=%x", s, v);
+		asprintf(&xo_print, "{P:%s%s=%x}", prefix ? prefix : "", s, v);
+
+	xo_emit(xo_print);
+	free(xo_print);
 	bits++;
 	if (bits) {
-		putchar('<');
+		xo_emit("{P:<}");
 		while ((i = *bits++) != '\0') {
 			if (v & (1 << (i-1))) {
+				memset(p_bits, 0, sizeof(p_bits));
+				j = 0;
 				if (any)
-					putchar(',');
+					xo_emit("{P:,}");
 				any = 1;
 				for (; (c = *bits) > 32; bits++)
-					putchar(c);
+					p_bits[j++] = c;
+				asprintf(&xo_print, "{l:%s}", s);
+				xo_emit(xo_print, p_bits);
+				free(xo_print);
 			} else
 				for (; *bits > 32; bits++)
 					;
 		}
-		putchar('>');
+		xo_emit("{P:>}");
 	}
 }
 
@@ -1253,8 +1290,8 @@ print_vhid(const struct ifaddrs *ifa, const char *s)
 	ifd = ifa->ifa_data;
 	if (ifd->ifi_vhid == 0)
 		return;
-	
-	printf("vhid %d ", ifd->ifi_vhid);
+
+	xo_emit("{L:vhid}{:vhid/%d}{P: }", ifd->ifi_vhid);
 }
 
 void

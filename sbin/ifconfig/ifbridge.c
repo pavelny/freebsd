@@ -175,7 +175,7 @@ bridge_interfaces(int s, const char *prefix)
 	for (i = 0; i < bifc.ifbic_len / sizeof(*req); i++) {
 		req = bifc.ifbic_req + i;
 		printf("%s%s ", prefix, req->ifbr_ifsname);
-		printb("flags", req->ifbr_ifsflags, IFBIFBITS);
+		printb(NULL, "flags", req->ifbr_ifsflags, IFBIFBITS);
 		printf("\n");
 
 		printf("%s", pad);
@@ -240,7 +240,7 @@ bridge_addresses(int s, const char *prefix)
 		    sizeof(ea.octet));
 		printf("%s%s Vlan%d %s %lu ", prefix, ether_ntoa(&ea),
 		    ifba->ifba_vlan, ifba->ifba_ifsname, ifba->ifba_expire);
-		printb("flags", ifba->ifba_flags, IFBAFBITS);
+		printb(NULL, "flags", ifba->ifba_flags, IFBAFBITS);
 		printf("\n");
 	}
 

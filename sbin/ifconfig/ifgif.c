@@ -65,7 +65,7 @@ gif_status(int s)
 		return;
 	if (opts == 0)
 		return;
-	printb("\toptions", opts, GIFBITS);
+	printb("\t", "options", opts, GIFBITS);
 	putchar('\n');
 }
 

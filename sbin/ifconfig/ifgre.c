@@ -58,7 +58,7 @@ gre_status(int s)
 	opts = 0;
 	if (ioctl(s, GREGOPTS, &ifr) != 0 || opts == 0)
 		return;
-	printb("\toptions", opts, GREBITS);
+	printb("\t", "options", opts, GREBITS);
 	putchar('\n');
 }
 

@@ -137,7 +137,7 @@ extern	int verbose;
 void	setifcap(const char *, int value, int s, const struct afswtch *);
 
 void	Perror(const char *cmd);
-void	printb(const char *s, unsigned value, const char *bits);
+void	printb(const char *prefix, const char *s, unsigned value, const char *bits);
 
 void	ifmaybeload(const char *name);
 

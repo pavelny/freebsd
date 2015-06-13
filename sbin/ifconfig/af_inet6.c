@@ -54,6 +54,8 @@ static const char rcsid[] =
 
 #include <netinet6/nd6.h>	/* Define ND6_INFINITE_LIFETIME */
 
+#include <libxo/xo.h>
+
 #include "ifconfig.h"
 
 static	struct in6_ifreq in6_ridreq;
@@ -211,7 +213,9 @@ in6_status(int s __unused, const struct ifaddrs *ifa)
 	if (error != 0)
 		inet_ntop(AF_INET6, &sin->sin6_addr, addr_buf,
 			  sizeof(addr_buf));
-	printf("\tinet6 %s ", addr_buf);
+
+	xo_open_instance("inet6");
+	xo_emit("{P:\t}{L:inet6}{P: }{:inet6/%s}{P: }", addr_buf);
 
 	if (ifa->ifa_flags & IFF_POINTOPOINT) {
 		sin = (struct sockaddr_in6 *)ifa->ifa_dstaddr;
@@ -236,28 +240,28 @@ in6_status(int s __unused, const struct ifaddrs *ifa)
 	sin = (struct sockaddr_in6 *)ifa->ifa_netmask;
 	if (sin == NULL)
 		sin = &null_sin;
-	printf("prefixlen %d ", prefix(&sin->sin6_addr,
+	xo_emit("{L:prefixlen}{P: }{:prefixlen/%d}{P: }", prefix(&sin->sin6_addr,
 		sizeof(struct in6_addr)));
 
 	if ((flags6 & IN6_IFF_ANYCAST) != 0)
-		printf("anycast ");
+		xo_emit("{l:flags}{P: }", "anycast");
 	if ((flags6 & IN6_IFF_TENTATIVE) != 0)
-		printf("tentative ");
+		xo_emit("{l:flags}{P: }", "tentative");
 	if ((flags6 & IN6_IFF_DUPLICATED) != 0)
-		printf("duplicated ");
+		xo_emit("{l:flags}{P: }", "duplicated");
 	if ((flags6 & IN6_IFF_DETACHED) != 0)
-		printf("detached ");
+		xo_emit("detached ");
 	if ((flags6 & IN6_IFF_DEPRECATED) != 0)
-		printf("deprecated ");
+		xo_emit("{l:flags}{P: }", "deprecated");
 	if ((flags6 & IN6_IFF_AUTOCONF) != 0)
-		printf("autoconf ");
+		xo_emit("{l:flags}{P: }", "autoconf");
 	if ((flags6 & IN6_IFF_TEMPORARY) != 0)
-		printf("temporary ");
+		xo_emit("{l:flags}{P: }", "temporary");
 	if ((flags6 & IN6_IFF_PREFER_SOURCE) != 0)
-		printf("prefer_source ");
+		xo_emit("{l:flags}{P: }", "prefer_source");
 
 	if (((struct sockaddr_in6 *)(ifa->ifa_addr))->sin6_scope_id)
-		printf("scopeid 0x%x ",
+		xo_emit("{L:scopeid}{P: }{:scopeid/0x%x}{P: }",
 		    ((struct sockaddr_in6 *)(ifa->ifa_addr))->sin6_scope_id);
 
 	if (ip6lifetime && (lifetime.ia6t_preferred || lifetime.ia6t_expire)) {
@@ -280,7 +284,9 @@ in6_status(int s __unused, const struct ifaddrs *ifa)
 
 	print_vhid(ifa, " ");
 
-	putchar('\n');
+	xo_emit("{P:\n}");
+
+	xo_close_instance("inet6");
 }
 
 #define	SIN6(x) ((struct sockaddr_in6 *) &(x))

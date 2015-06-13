@@ -50,6 +50,8 @@ static const char rcsid[] =
 #include <arpa/inet.h>
 #include <netdb.h>
 
+#include <libxo/xo.h>
+
 #include "ifconfig.h"
 
 static struct in_aliasreq in_addreq;
@@ -59,36 +61,48 @@ static void
 in_status(int s __unused, const struct ifaddrs *ifa)
 {
 	struct sockaddr_in *sin, null_sin;
-	
+	unsigned long netmask;
+
 	memset(&null_sin, 0, sizeof(null_sin));
 
 	sin = (struct sockaddr_in *)ifa->ifa_addr;
 	if (sin == NULL)
 		return;
 
-	printf("\tinet %s ", inet_ntoa(sin->sin_addr));
+	xo_open_instance("inet");
+	xo_emit("{P:\t}{L:inet}{P: }{:inet/%s}{P: }", inet_ntoa(sin->sin_addr));
 
 	if (ifa->ifa_flags & IFF_POINTOPOINT) {
 		sin = (struct sockaddr_in *)ifa->ifa_dstaddr;
 		if (sin == NULL)
 			sin = &null_sin;
-		printf("--> %s ", inet_ntoa(sin->sin_addr));
+		xo_emit("{L:-->}{P: }{:pointopoint/%s}{P: }", inet_ntoa(sin->sin_addr));
 	}
 
 	sin = (struct sockaddr_in *)ifa->ifa_netmask;
 	if (sin == NULL)
 		sin = &null_sin;
-	printf("netmask 0x%lx ", (unsigned long)ntohl(sin->sin_addr.s_addr));
+	netmask = (unsigned long)ntohl(sin->sin_addr.s_addr);
+	xo_emit("{L:netmask}{P: }{d:netmask/0x%lx}{P: }", netmask);
+	xo_open_container("netmask");
+	xo_emit("{eq:integer/%lx}", netmask);
+	xo_emit("{eq:dot-decimal/%d.%d.%d.%d}",
+		((netmask >> 24) & 0xFF),
+		((netmask >> 16) & 0xFF),
+		((netmask >> 8) & 0xFF),
+		(netmask & 0xFF));
 
+	xo_close_container("netmask");
 	if (ifa->ifa_flags & IFF_BROADCAST) {
 		sin = (struct sockaddr_in *)ifa->ifa_broadaddr;
 		if (sin != NULL && sin->sin_addr.s_addr != 0)
-			printf("broadcast %s ", inet_ntoa(sin->sin_addr));
+			xo_emit("{L:broadcast}{P: }{:broadcast/%s}{P: }", inet_ntoa(sin->sin_addr));
 	}
 
 	print_vhid(ifa, " ");
 
-	putchar('\n');
+	xo_emit("{P:\n}");
+	xo_close_instance("inet");
 }
 
 #define SIN(x) ((struct sockaddr_in *) &(x))
@@ -126,7 +140,7 @@ in_getaddr(const char *s, int which)
 			}
 			min->sin_family = AF_INET;
 			min->sin_len = sizeof(*min);
-			min->sin_addr.s_addr = htonl(~((1LL << (32 - masklen)) - 1) & 
+			min->sin_addr.s_addr = htonl(~((1LL << (32 - masklen)) - 1) &
 				              0xffffffff);
 		}
 	}
@@ -134,7 +148,7 @@ in_getaddr(const char *s, int which)
 	if (inet_aton(s, &sin->sin_addr))
 		return;
 	if ((hp = gethostbyname(s)) != 0)
-		bcopy(hp->h_addr, (char *)&sin->sin_addr, 
+		bcopy(hp->h_addr, (char *)&sin->sin_addr,
 		    MIN((size_t)hp->h_length, sizeof(sin->sin_addr)));
 	else if ((np = getnetbyname(s)) != 0)
 		sin->sin_addr = inet_makeaddr(np->n_net, INADDR_ANY);

@@ -52,6 +52,8 @@ static const char rcsid[] =
 
 #include <netinet6/nd6.h>
 
+#include <libxo/xo.h>
+
 #include "ifconfig.h"
 
 #define	MAX_SYSCTL_TRY	5
@@ -163,7 +165,8 @@ nd6_status(int s)
 	close(s6);
 	if (nd.ndi.flags == 0 && !isdefif)
 		return;
-	printb("\tnd6 options",
+
+	printb("\t", "nd6 options",
 	    (unsigned int)(nd.ndi.flags | (isdefif << 15)), ND6BITS);
-	putchar('\n');
+	xo_emit("{P:\n}");
 }

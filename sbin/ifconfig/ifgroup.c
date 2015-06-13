@@ -40,6 +40,7 @@ static const char rcsid[] =
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <libxo/xo.h>
 
 #include "ifconfig.h"
 
@@ -111,13 +112,14 @@ getifgroups(int s)
 		len -= sizeof(struct ifg_req);
 		if (strcmp(ifg->ifgrq_group, "all")) {
 			if (cnt == 0)
-				printf("\tgroups: ");
+				xo_emit("{P:\t}{L:groups}{P:: }");
 			cnt++;
-			printf("%s ", ifg->ifgrq_group);
-		}
+			xo_emit("{l:groups}", ifg->ifgrq_group);
+		} else
+			xo_emit("{el:groups}", "all");
 	}
 	if (cnt)
-		printf("\n");
+		xo_emit("{P:\n}");
 
 	free(ifgr.ifgr_groups);
 }

@@ -83,6 +83,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <libxo/xo.h>
+
 #include "ifconfig.h"
 
 static void	domediaopt(const char *, int, int);
@@ -144,57 +146,60 @@ media_status(int s)
 			err(1, "SIOCGIFMEDIA");
 	}
 
-	printf("\tmedia: ");
+	xo_open_container("media");
 	print_media_word(ifmr.ifm_current, 1);
 	if (ifmr.ifm_active != ifmr.ifm_current) {
-		putchar(' ');
-		putchar('(');
+		xo_emit("{P: (}");
 		print_media_word(ifmr.ifm_active, 0);
-		putchar(')');
+		xo_emit("{P:)}");
 	}
+	xo_close_container("media");
 
-	putchar('\n');
+	xo_emit("{P:\n}");
 
 	if (ifmr.ifm_status & IFM_AVALID) {
-		printf("\tstatus: ");
 		switch (IFM_TYPE(ifmr.ifm_active)) {
 		case IFM_ETHER:
 		case IFM_ATM:
 			if (ifmr.ifm_status & IFM_ACTIVE)
-				printf("active");
+				xo_emit("{L:\tstatus: }{:status/%s}", "active");
 			else
-				printf("no carrier");
+				xo_emit("{L:\tstatus: }{:status/%s}", "no carrier");
 			break;
 
 		case IFM_FDDI:
 		case IFM_TOKEN:
 			if (ifmr.ifm_status & IFM_ACTIVE)
-				printf("inserted");
+				xo_emit("{L:\tstatus: }{:status/%s}", "inserted");
 			else
-				printf("no ring");
+				xo_emit("{L:\tstatus: }{:status/%s}", "no ring");
 			break;
 
 		case IFM_IEEE80211:
 			if (ifmr.ifm_status & IFM_ACTIVE) {
 				/* NB: only sta mode associates */
 				if (IFM_OPMODE(ifmr.ifm_active) == IFM_IEEE80211_STA)
-					printf("associated");
+					xo_emit("{L:\tstatus: }{:status/%s}", "associated}");
 				else
-					printf("running");
+					xo_emit("{L:\tstatus: }{:status/%s}", "running}");
 			} else
-				printf("no carrier");
+				xo_emit("{L:\tstatus: }{:status/%s}", "no carrier}");
 			break;
 		}
-		putchar('\n');
+		xo_emit("{P:\n}");
 	}
 
 	if (ifmr.ifm_count > 0 && supmedia) {
-		printf("\tsupported media:\n");
+		xo_emit("{P:\tsupported media:\n}");
+		xo_open_list("supported_media");
 		for (i = 0; i < ifmr.ifm_count; i++) {
-			printf("\t\t");
+			xo_emit("{P:\t\t}");
+			xo_open_instance("supported_media");
 			print_media_word_ifconfig(media_list[i]);
-			putchar('\n');
+			xo_close_instance("supported_media");
+			xo_emit("{P:\n}");
 		}
+		xo_close_list("supported_media");
 	}
 
 	free(media_list);
@@ -723,10 +728,10 @@ print_media_word(int ifmw, int print_toptype)
 	desc = get_toptype_desc(ifmw);
 	ttos = get_toptype_ttos(ifmw);
 	if (desc->ifmt_string == NULL) {
-		printf("<unknown type>");
+		xo_emit("{d:<unknown type>}");
 		return;
 	} else if (print_toptype) {
-		printf("%s", desc->ifmt_string);
+		xo_emit("{L:\tmedia: }{:type/%s}{P: }", desc->ifmt_string);
 	}
 
 	/*
@@ -742,14 +747,14 @@ print_media_word(int ifmw, int print_toptype)
 	}
 
 	if (print_toptype)
-		putchar(' ');
-
-	printf("%s", desc->ifmt_string);
+		xo_emit("{:current/%s}", desc->ifmt_string);
+	else
+		xo_emit("{:active/%s}", desc->ifmt_string);
 
 	if (print_toptype) {
 		desc = get_mode_desc(ifmw, ttos);
 		if (desc != NULL && strcasecmp("autoselect", desc->ifmt_string))
-			printf(" mode %s", desc->ifmt_string);
+			xo_emit("{L: mode }{e:mode/%s}", desc->ifmt_string);
 	}
 
 	/* Find options. */
@@ -760,16 +765,19 @@ print_media_word(int ifmw, int print_toptype)
 		    desc->ifmt_string != NULL; desc++) {
 			if (ifmw & desc->ifmt_word) {
 				if (seen_option == 0)
-					printf(" <");
-				printf("%s%s", seen_option++ ? "," : "",
-				    desc->ifmt_string);
+					xo_emit("{P: <}");
+				else
+					xo_emit("{P:,}");
+				xo_emit("{l:options}", desc->ifmt_string);
+				seen_option++;
 			}
 		}
 	}
-	printf("%s", seen_option ? ">" : "");
+	if (seen_option)
+		xo_emit("{P:>}");
 
 	if (print_toptype && IFM_INST(ifmw) != 0)
-		printf(" instance %d", IFM_INST(ifmw));
+		xo_emit("{L: instance }{:instance/%d}", IFM_INST(ifmw));
 }
 
 static void
@@ -783,7 +791,7 @@ print_media_word_ifconfig(int ifmw)
 	desc = get_toptype_desc(ifmw);
 	ttos = get_toptype_ttos(ifmw);
 	if (desc->ifmt_string == NULL) {
-		printf("<unknown type>");
+		xo_emit("{d:<unknown type>}");
 		return;
 	}
 
@@ -795,15 +803,15 @@ print_media_word_ifconfig(int ifmw)
 	/* Find subtype. */
 	desc = get_subtype_desc(ifmw, ttos);
 	if (desc == NULL) {
-		printf("<unknown subtype>");
+		xo_emit("{d:<unknown subtype>}");
 		return;
 	}
 
-	printf("media %s", desc->ifmt_string);
+	xo_emit("{L:media }{:media/%s}", desc->ifmt_string);
 
 	desc = get_mode_desc(ifmw, ttos);
 	if (desc != NULL)
-		printf(" mode %s", desc->ifmt_string);
+		xo_emit("{L: mode }{:mode/%s}", desc->ifmt_string);
 
 	/* Find options. */
 	for (i = 0; ttos->options[i].desc != NULL; i++) {
@@ -813,15 +821,17 @@ print_media_word_ifconfig(int ifmw)
 		    desc->ifmt_string != NULL; desc++) {
 			if (ifmw & desc->ifmt_word) {
 				if (seen_option == 0)
-					printf(" mediaopt ");
-				printf("%s%s", seen_option++ ? "," : "",
-				    desc->ifmt_string);
+					xo_emit("{L: mediaopt }");
+				else
+					xo_emit("{P:,}");
+				xo_emit("{l:mediaopt}", desc->ifmt_string);
+				seen_option++;
 			}
 		}
 	}
 
 	if (IFM_INST(ifmw) != 0)
-		printf(" instance %d", IFM_INST(ifmw));
+		printf("{L: instance }{:instance/%d}", IFM_INST(ifmw));
 }
 
 /**********************************************************************
