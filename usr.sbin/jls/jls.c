@@ -202,28 +202,29 @@ main(int argc, char **argv)
 		add_param("lastjid", &lastjid, sizeof(lastjid), NULL, 0);
 
 	/* Print a header line if requested. */
-	if (pflags & PRINT_VERBOSE)
-		xo_emit("{Pd:   }{T:JID}{Pd:  }{T:Hostname}{Pd:                      }{T:Path}\n"
-		        "{Pd:        }{T:Name}{Pd:                          }{T:State}\n"
-		        "{Pd:        }{T:CPUSetID}\n"
-		        "{Pd:        }{T:IP Address(es)}\n");
+	if (pflags & PRINT_VERBOSE) {
+		xo_emit("{P:   }{T:JID}{P:  }{T:Hostname}{P:/%22s}{T:Path}\n", "");
+		xo_emit("{P:/%8s}{T:Name}{Pd:/%26s}{T:State}\n", "", "");
+		xo_emit("{P:/%8s}{T:CPUSetID}\n", "");
+		xo_emit("{P:/%8s}{T:IP Address(es)}\n", "");
+	}
 	else if (pflags & PRINT_DEFAULT)
 		if (pflags & PRINT_JAIL_NAME)
-			xo_emit("{P: }{T:JID}{P:             }{T:IP Address}{P:      }"
-			        "{T:Hostname}{P:                      }{T:Path}\n");
+			xo_emit("{P: }{T:JID}{P:/%13s}{T:IP Address}{P:/%6s}"
+			        "{T:Hostname}{P:/%22s}{T:Path}\n", "", "", "");
 		else
-			xo_emit("{P:   }{T:JID}{P:  }{T:IP Address}{P:      }"
-			        "{T:Hostname}{P:                      }{T:Path}\n");
+			xo_emit("{P:   }{T:JID}{P:  }{T:IP Address}{P:/%6s}"
+			        "{T:Hostname}{P:/%22s}{T:Path}\n", "", "");
 	else if (pflags & PRINT_HEADER) {
 		for (i = spc = 0; i < nparams; i++)
 			if (params[i].jp_flags & JP_USER) {
 				if (spc)
-					xo_emit(" ");
+					xo_emit("{P: }");
 				else
 					spc = 1;
 				xo_emit(params[i].jp_name, stdout);
 			}
-		xo_emit("\n");
+		xo_emit("{P:\n}");
 	}
 
 	xo_open_list("jails");
@@ -439,6 +440,8 @@ print_jail(int pflags, int jflags)
 		    (char *)params[3-!ip4_ok].jp_value);
 #else
 		    "-",
+		    "-",
+		    (char *)params[1].jp_value,
 		    (char *)params[1].jp_value,
 		    (char *)params[2].jp_value);
 #endif
@@ -462,7 +465,7 @@ print_jail(int pflags, int jflags)
 			      JAIL_SYS_NEW)))
 				continue;
 			if (spc)
-				xo_emit(" ");
+				xo_emit("{P: }");
 			else
 				spc = 1;
 			if (pflags & PRINT_NAMEVAL) {
@@ -499,14 +502,14 @@ print_jail(int pflags, int jflags)
 			}
 			if (params[i].jp_valuelen == 0) {
 				if (pflags & PRINT_QUOTED)
-					xo_emit("\"\"");
+					xo_emit("{P:\"\"}");
 				else if (!(pflags & PRINT_NAMEVAL))
-					xo_emit("-");
+					xo_emit("{P:-}");
 			} else {
 				quoted_print(pflags, params[i].jp_name, param_values[i]);
 			}
 		}
-		xo_emit("\n");
+		xo_emit("{P:\n}");
 		for (i = 0; i < nparams; i++)
 			if (params[i].jp_flags & JP_USER)
 				free(param_values[i]);
