@@ -125,7 +125,7 @@ main(int argc, char **argv)
 			    PRINT_VERBOSE;
 			break;
 		default:
-			errx(1, "usage: jls [-dhNnqv] [-j jail] [param ...]");
+			xo_errx(1, "usage: jls [-dhNnqv] [-j jail] [param ...]");
 		}
 
 #ifdef INET6
@@ -230,13 +230,13 @@ main(int argc, char **argv)
 	/* Fetch the jail(s) and print the paramters. */
 	if (jid != 0 || jname != NULL) {
 		if (print_jail(pflags, jflags) < 0)
-			errx(1, "%s", jail_errmsg);
+			xo_errx(1, "%s", jail_errmsg);
 	} else {
 		for (lastjid = 0;
 		     (lastjid = print_jail(pflags, jflags)) >= 0; )
 			;
 		if (errno != 0 && errno != ENOENT)
-			errx(1, "%s", jail_errmsg);
+			xo_errx(1, "%s", jail_errmsg);
 	}
 	xo_close_list("jails");
 	xo_finish();
@@ -256,7 +256,7 @@ add_param(const char *name, void *value, size_t valuelen,
 	if (!strcmp(name, "all")) {
 		tnparams = jailparam_all(&tparams);
 		if (tnparams < 0)
-			errx(1, "%s", jail_errmsg);
+			xo_errx(1, "%s", jail_errmsg);
 		qsort(tparams, (size_t)tnparams, sizeof(struct jailparam),
 		    sort_param);
 		for (i = 0; i < tnparams; i++)
@@ -271,7 +271,7 @@ add_param(const char *name, void *value, size_t valuelen,
 		if (!strcmp(name, params[i].jp_name)) {
 			if (value != NULL && jailparam_import_raw(params + i,
 			    value, valuelen) < 0)
-				errx(1, "%s", jail_errmsg);
+				xo_errx(1, "%s", jail_errmsg);
 			params[i].jp_flags |= flags;
 			if (source != NULL)
 				jailparam_free(source, 1);
@@ -309,7 +309,7 @@ add_param(const char *name, void *value, size_t valuelen,
 			nparams--;
 			return (-1);
 		}
-		errx(1, "%s", jail_errmsg);
+		xo_errx(1, "%s", jail_errmsg);
 	}
 	param->jp_flags = flags;
 	return param - params;
@@ -402,7 +402,7 @@ print_jail(int pflags, int jflags)
 				    ipbuf, sizeof(ipbuf)) == NULL)
 					err(1, "inet_ntop");
 				else {
-					xo_emit("{P:        }{l:ipv4_addrs}\n", ipbuf);
+					xo_emit("{P:        }{l:ipv4_addrs}{P:\n}", ipbuf);
 				}
 			n++;
 		}
@@ -417,7 +417,7 @@ print_jail(int pflags, int jflags)
 				    ipbuf, sizeof(ipbuf)) == NULL)
 					err(1, "inet_ntop");
 				else
-					xo_emit("{P:        }{e:ipv6_addrs}\n", ipbuf);
+					xo_emit("{P:        }{l:ipv6_addrs}{P:\n}", ipbuf);
 			n++;
 		}
 #endif
@@ -428,7 +428,7 @@ print_jail(int pflags, int jflags)
 				(char *)params[0].jp_value);
 		else
 			xo_emit("{:jid/%6d}{P:  }", *(int *)params[0].jp_value);
-		xo_emit("{e:ip/%s}{d:ipv4/%-15.15s}{P: }{e:hostname/%s}{d:hostname/%-29.29s}{P: }{:path/%.74s}\n",
+		xo_emit("{e:ipv4/%s}{d:ipv4/%-15.15s}{P: }{e:hostname/%s}{d:hostname/%-29.29s}{P: }{:path/%.74s}\n",
 #ifdef INET
 		    (!ip4_ok || params[1].jp_valuelen == 0) ? ""
 		    : inet_ntoa(*(struct in_addr *)params[1].jp_value),
@@ -449,7 +449,7 @@ print_jail(int pflags, int jflags)
 				continue;
 			param_values[i] = jailparam_export(params + i);
 			if (param_values[i] == NULL)
-				errx(1, "%s", jail_errmsg);
+				xo_errx(1, "%s", jail_errmsg);
 		}
 		for (i = spc = 0; i < nparams; i++) {
 			if (!(params[i].jp_flags & JP_USER))
