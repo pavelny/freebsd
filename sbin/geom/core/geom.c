@@ -49,6 +49,8 @@ __FBSDID("$FreeBSD$");
 #include <libgeom.h>
 #include <geom.h>
 
+#include <libxo/xo.h>
+
 #include "misc/subr.h"
 
 #ifdef STATIC_GEOM_CLASSES
@@ -653,6 +655,9 @@ int
 main(int argc, char *argv[])
 {
 
+	argc = xo_parse_args(argc, argv);
+	if (argc < 0)
+		usage();
 	get_class(&argc, &argv);
 	run_command(argc, argv);
 	/* NOTREACHED */

@@ -14,7 +14,7 @@ MAN=
 WARNS?=	2
 CFLAGS+=-I${.CURDIR} -I${.CURDIR}/core -DSTATIC_GEOM_CLASSES
 
-LIBADD=	geom util
+LIBADD=	geom util xo
 
 .include <bsd.prog.mk>
 

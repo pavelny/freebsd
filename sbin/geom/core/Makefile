@@ -11,6 +11,6 @@ NO_SHARED=NO
 CFLAGS+= -DGEOM_CLASS_DIR=\"${GEOM_CLASS_DIR}\"
 CFLAGS+= -I${.CURDIR}/../../../sys -I${.CURDIR} -I${.CURDIR}/..
 
-LIBADD=	geom util
+LIBADD=	geom util xo
 
 .include <bsd.prog.mk>
