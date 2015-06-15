@@ -690,32 +690,37 @@ find_geom(struct gclass *classp, const char *name)
 }
 
 static void
-list_one_provider(struct gprovider *pp, const char *prefix)
+list_one_provider(struct gprovider *pp)
 {
 	struct gconfig *conf;
 	char buf[5];
+	char *xo_print;
 
-	printf("Name: %s\n", pp->lg_name);
+	xo_emit("{Lcw:Name}{:name/%s}{P:\n}", pp->lg_name);
 	humanize_number(buf, sizeof(buf), (int64_t)pp->lg_mediasize, "",
 	    HN_AUTOSCALE, HN_B | HN_NOSPACE | HN_DECIMAL);
-	printf("%sMediasize: %jd (%s)\n", prefix, (intmax_t)pp->lg_mediasize,
-	    buf);
-	printf("%sSectorsize: %u\n", prefix, pp->lg_sectorsize);
+	xo_emit("{P:   }{Lcw:Mediasize}{:mediasize/%jd}{P: (}{:mediasize_human/%s}{P:)\n}",
+		(intmax_t)pp->lg_mediasize,
+		buf);
+	xo_emit("{P:   }{Lcw:Sectorsize}{:sectorsize/%u}{P:\n}", pp->lg_sectorsize);
 	if (pp->lg_stripesize > 0 || pp->lg_stripeoffset > 0) {
-		printf("%sStripesize: %ju\n", prefix, pp->lg_stripesize);
-		printf("%sStripeoffset: %ju\n", prefix, pp->lg_stripeoffset);
+		xo_emit("{P:   }{Lcw:Stripesize}{:stripesize/%ju}{P:\n}", pp->lg_stripesize);
+		xo_emit("{P:   }{Lcw:Stripeoffset}{:stripeoffset/%ju}{P:\n}", pp->lg_stripeoffset);
 	}
-	printf("%sMode: %s\n", prefix, pp->lg_mode);
+	xo_emit("{P:   }{Lcw:Mode}{:Mode/%s}{P:\n}", pp->lg_mode);
 	LIST_FOREACH(conf, &pp->lg_config, lg_config) {
-		printf("%s%s: %s\n", prefix, conf->lg_name, conf->lg_val);
+		asprintf(&xo_print, "{P:   }{Lcw:%s}{:%s/%%s}{P:\n}", conf->lg_name, conf->lg_name);
+		xo_emit(xo_print, conf->lg_val);
+		free(xo_print);
 	}
 }
 
 static void
-list_one_consumer(struct gconsumer *cp, const char *prefix)
+list_one_consumer(struct gconsumer *cp)
 {
 	struct gprovider *pp;
 	struct gconfig *conf;
+	char *xo_print;
 
 	pp = cp->lg_provider;
 	if (pp == NULL)
@@ -723,20 +728,22 @@ list_one_consumer(struct gconsumer *cp, const char *prefix)
 	else {
 		char buf[5];
 
-		printf("Name: %s\n", pp->lg_name);
+		xo_emit("{Lcw:Name}{:name/%s}{P:\n}", pp->lg_name);
 		humanize_number(buf, sizeof(buf), (int64_t)pp->lg_mediasize, "",
 		    HN_AUTOSCALE, HN_B | HN_NOSPACE | HN_DECIMAL);
-		printf("%sMediasize: %jd (%s)\n", prefix,
+		xo_emit("{P:   }{Lcw:Mediasize}{:mediasize/%jd}{P: (}{:mediasize_human/%s}{P:)\n}",
 		    (intmax_t)pp->lg_mediasize, buf);
-		printf("%sSectorsize: %u\n", prefix, pp->lg_sectorsize);
+		xo_emit("{P:   }{Lcw:Sectorsize}{:sectorsize/%u}{P:\n}", pp->lg_sectorsize);
 		if (pp->lg_stripesize > 0 || pp->lg_stripeoffset > 0) {
-			printf("%sStripesize: %ju\n", prefix, pp->lg_stripesize);
-			printf("%sStripeoffset: %ju\n", prefix, pp->lg_stripeoffset);
+			xo_emit("{P:   }{Lcw:Stripesize}{:stripesize/%ju}{P:\n}", pp->lg_stripesize);
+			xo_emit("{P:   }{Lcw:Stripeoffset}{:stripeoffset/%ju}{P:\n}", pp->lg_stripeoffset);
 		}
-		printf("%sMode: %s\n", prefix, cp->lg_mode);
+		xo_emit("{P:   }{Lcw:Mode}{:mode/%s}{P:\n}", cp->lg_mode);
 	}
 	LIST_FOREACH(conf, &cp->lg_config, lg_config) {
-		printf("%s%s: %s\n", prefix, conf->lg_name, conf->lg_val);
+		asprintf(&xo_print, "{P:   }{Lcw:%s}{:%s/%%s}{P:\n}", conf->lg_name, conf->lg_name);
+		xo_emit(xo_print, conf->lg_val);
+		free(xo_print);
 	}
 }
 
@@ -747,28 +754,40 @@ list_one_geom(struct ggeom *gp)
 	struct gconsumer *cp;
 	struct gconfig *conf;
 	unsigned n;
+	char *xo_conf;
 
-	printf("Geom name: %s\n", gp->lg_name);
+	xo_open_instance("geoms");
+	xo_emit("{Lc:Geom name}{P: }{:name/%s}{P:\n}", gp->lg_name);
 	LIST_FOREACH(conf, &gp->lg_config, lg_config) {
-		printf("%s: %s\n", conf->lg_name, conf->lg_val);
+		asprintf(&xo_conf, "{Lcw:%s}{:%s/%%s}{P:\n}", conf->lg_name, conf->lg_name);
+		xo_emit(xo_conf, conf->lg_val);
 	}
 	if (!LIST_EMPTY(&gp->lg_provider)) {
-		printf("Providers:\n");
+		xo_emit("{P:Providers:\n}");
+		xo_open_list("providers");
 		n = 1;
 		LIST_FOREACH(pp, &gp->lg_provider, lg_provider) {
-			printf("%u. ", n++);
-			list_one_provider(pp, "   ");
+			xo_open_instance("providers");
+			xo_emit("{d:num/%u}{P:. }", n++);
+			list_one_provider(pp);
+			xo_close_instance("providers");
 		}
+		xo_close_list("providers");
 	}
 	if (!LIST_EMPTY(&gp->lg_consumer)) {
-		printf("Consumers:\n");
+		xo_emit("{P:Consumers:\n}");
+		xo_open_list("consumers");
 		n = 1;
 		LIST_FOREACH(cp, &gp->lg_consumer, lg_consumer) {
-			printf("%u. ", n++);
-			list_one_consumer(cp, "   ");
+			xo_open_instance("consumers");
+			xo_emit("{d:num/%u}{P:. }", n++);
+			list_one_consumer(cp);
+			xo_close_instance("consumers");
 		}
+		xo_close_list("consumers");
 	}
-	printf("\n");
+	xo_emit("{P:\n}");
+	xo_close_instance("geoms");
 }
 
 static void
@@ -814,6 +833,7 @@ std_list(struct gctl_req *req, unsigned flags __unused)
 	}
 	nargs = gctl_get_int(req, "nargs");
 	all = gctl_get_int(req, "all");
+	xo_open_list("geoms");
 	if (nargs > 0) {
 		for (i = 0; i < nargs; i++) {
 			name = gctl_get_ascii(req, "arg%d", i);
@@ -829,6 +849,8 @@ std_list(struct gctl_req *req, unsigned flags __unused)
 			list_one_geom(gp);
 		}
 	}
+	xo_close_list("geoms");
+	xo_finish();
 	geom_deletetree(&mesh);
 }
 
