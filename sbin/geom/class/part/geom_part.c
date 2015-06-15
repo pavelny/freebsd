@@ -612,6 +612,7 @@ gpart_show_geom(struct ggeom *gp, const char *element, int show_providers)
 {
 	struct gprovider *pp;
 	const char *s, *scheme;
+	char *xo_print = NULL;
 	off_t first, last, sector, end;
 	off_t length, secsz;
 	int idx, wblocks, wname, wmax;
@@ -653,7 +654,7 @@ gpart_show_geom(struct ggeom *gp, const char *element, int show_providers)
 
 	xo_open_container(gp->lg_name);
 
-	xo_emit("{P:=>}{:startblock/%*jd}{P:  }{:totalblock/%*jd}{P:  }{d:name/%*s}{P:  }{:scheme/%s}{P:  }{P:(}{:size/%s}{P:)}{e:corrupt/%s}{d:%s}{P:\n}",
+	xo_emit("{P:=>}{:startblock/%*jd}{P:  }{:totalblock/%*jd}{P:  }{d:name/%*s}{P:  }{:scheme2/%s}{P:  }{P:(}{:size/%s}{P:)}{e:corrupt/%s}{d:%s}{P:\n}",
 	    wblocks, (intmax_t)first, wblocks, (intmax_t)(last - first + 1),
 	    wname, gp->lg_name,
 	    scheme, fmtsize(pp->lg_mediasize),
@@ -673,32 +674,47 @@ gpart_show_geom(struct ggeom *gp, const char *element, int show_providers)
 		s = find_provcfg(pp, "index");
 		idx = atoi(s);
 		if (first < sector) {
-			printf("  %*jd  %*jd  %*s  - free -  (%s)\n",
-			    wblocks, (intmax_t)first, wblocks,
-			    (intmax_t)(sector - first), wname, "",
-			    fmtsize((sector - first) * secsz));
+			xo_emit("{P:  }{:startblock/%*jd}{P:  }{:endblock/%*jd}{P:  }{:provider/%*s}{P:  - }{:attribute/%s}}P: -  }{P:(}{:size/%s}{P:)}{P:\n}",
+				wblocks, (intmax_t)first,
+				wblocks, (intmax_t)(sector - first),
+				wname, "",
+				"free",
+				fmtsize((sector - first) * secsz));
 		}
 		if (show_providers) {
-			xo_emit("{P:  }{:startblock/%*jd}{P:  }{:endblock/%*jd}{P:  }{:provider/%*s}{P:  }{:type/%s}{P: }{:attribute/%s}{P: }{P:(}{:size/%s}{P:)}{P:\n}",
-			    wblocks, (intmax_t)sector, wblocks,
-			    (intmax_t)length, wname, pp->lg_name,
-			    find_provcfg(pp, element), fmtattrib(pp),
-			    fmtsize(pp->lg_mediasize));
-		} else
-			xo_emit("{P:  }{:startblock/%*jd}{P:  }{:endblock/%*jd}{P:  }{:index/%*d}{P:  }{:type/%s}{P: }{:attribute/%s}{P: }{P:(}{:size/%s}{P:)}{P:\n}",
-			    wblocks, (intmax_t)sector, wblocks,
-			    (intmax_t)length, wname, idx,
-			    find_provcfg(pp, element), fmtattrib(pp),
-			    fmtsize(pp->lg_mediasize));
+			asprintf(&xo_print, "{P:  }{:startblock/%%*jd}{P:  }{:endblock/%%*jd}{P:  }{:provider/%%*s}{P:  }{:%s/%%s}{P: }{:attribute/%%s}{P: }{P:(}{:size/%%s}{P:)}{P:\n}",
+				 element);
+			xo_emit(xo_print,
+				wblocks, (intmax_t)sector,
+				wblocks, (intmax_t)length,
+				wname, pp->lg_name,
+				find_provcfg(pp, element),
+				fmtattrib(pp),
+				fmtsize(pp->lg_mediasize));
+		} else {
+			asprintf(&xo_print, "{P:  }{:startblock/%%*jd}{P:  }{:endblock/%%*jd}{P:  }{:index/%%*d}{P:  }{:%s/%%s}{P: }{:attribute/%%s}{P: }{P:(}{:size/%%s}{P:)}{P:\n}",
+				 element);
+			printf("toto\n");
+			xo_emit(xo_print,
+				wblocks, (intmax_t)sector,
+				wblocks, (intmax_t)length,
+				wname, idx,
+				find_provcfg(pp, element),
+				fmtattrib(pp),
+				fmtsize(pp->lg_mediasize));
+		}
 		first = end + 1;
 		xo_close_instance("providers");
 	}
+	if (xo_print)
+		free(xo_print);
 	if (first <= last) {
 		length = last - first + 1;
-		printf("  %*jd  %*jd  %*s  - free -  (%s)\n",
-		    wblocks, (intmax_t)first, wblocks, (intmax_t)length,
-		    wname, "",
-		    fmtsize(length * secsz));
+		xo_emit("{P:  }{:startblock/%*jd}{P:  }{:endblock/%*jd}{P:  }{:provider/%*s}{P:  - }{:attribute/%s}}P: -  }{P:(}{:size/%s}{P:)}{P:\n}",
+			wblocks, (intmax_t)first, wblocks,
+			(intmax_t)(sector - first), wname, "",
+			"free",
+			fmtsize(length * secsz));
 	}
 	xo_emit("{P:\n}");
 	xo_close_list("partitions");
