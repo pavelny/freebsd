@@ -1,5 +1,6 @@
 /*-
  * Copyright (c) 2007, 2008 Marcel Moolenaar
+ * Copyright (c) 2015 Emmanuel Vadot <manu@bocal.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -654,12 +655,13 @@ gpart_show_geom(struct ggeom *gp, const char *element, int show_providers)
 
 	xo_open_container(gp->lg_name);
 
-	xo_emit("{P:=>}{:startblock/%*jd}{P:  }{:totalblock/%*jd}{P:  }{d:name/%*s}{P:  }{:scheme2/%s}{P:  }{P:(}{:size/%s}{P:)}{e:corrupt/%s}{d:%s}{P:\n}",
-	    wblocks, (intmax_t)first, wblocks, (intmax_t)(last - first + 1),
-	    wname, gp->lg_name,
-	    scheme, fmtsize(pp->lg_mediasize),
-	    s ? "true": "false",
-	    s ? " [CORRUPT]": "");
+	xo_emit("{P:=>}{:startblock/%*jd}{P:  }{:totalblock/%*jd}{P:  }{d:name/%*s}{P:  }{:scheme/%s}{P:  }{P:(}{:size/%s}{P:)}{e:corrupt/%s}{d:%s}{P:\n}",
+		wblocks, (intmax_t)first,
+		wblocks, (intmax_t)(last - first + 1),
+		wname, gp->lg_name,
+		scheme, fmtsize(pp->lg_mediasize),
+		s ? "true": "false",
+		s ? " [CORRUPT]": "");
 
 	xo_open_list("partitions");
 	while ((pp = find_provider(gp, first)) != NULL) {
