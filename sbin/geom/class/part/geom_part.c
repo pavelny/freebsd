@@ -696,7 +696,6 @@ gpart_show_geom(struct ggeom *gp, const char *element, int show_providers)
 		} else {
 			asprintf(&xo_print, "{P:  }{:startblock/%%*jd}{P:  }{:endblock/%%*jd}{P:  }{:index/%%*d}{P:  }{:%s/%%s}{P: }{:attribute/%%s}{P: }{P:(}{:size/%%s}{P:)}{P:\n}",
 				 element);
-			printf("toto\n");
 			xo_emit(xo_print,
 				wblocks, (intmax_t)sector,
 				wblocks, (intmax_t)length,
