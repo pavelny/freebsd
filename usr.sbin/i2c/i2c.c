@@ -1,5 +1,6 @@
 /*-
  * Copyright (C) 2008-2009 Semihalf, Michal Hajduk and Bartlomiej Sieka
+ * Copyright (C) 2015 Emmanuel Vadot <manu@bidouilliste.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -57,6 +58,7 @@ struct options {
 	int	reset;
 	int	mode;
 	char	dir;
+	char	rdrw;
 	uint32_t	addr;
 	uint32_t	off;
 };
@@ -71,7 +73,7 @@ usage(void)
 {
 
 	fprintf(stderr, "usage: %s -a addr [-f device] [-d [r|w]] [-o offset] "
-	    "[-w [0|8|16]] [-c count] [-m [ss|rs|no]] [-b] [-v]\n",
+	    "[-w [0|8|16]] [-c count] [-m [ss|rs|no]] [-b] [-x] [-v]\n",
 	    getprogname());
 	fprintf(stderr, "       %s -s [-f device] [-n skip_addr] -v\n",
 	    getprogname());
@@ -119,11 +121,13 @@ skip_get_tokens(char *skip_addr, int *sk_addr, int max_index)
 }
 
 static int
-scan_bus(struct iiccmd cmd, char *dev, int skip, char *skip_addr)
+scan_bus(struct iiccmd cmd, char rdrw, char *dev, int skip, char *skip_addr)
 {
+	struct iic_rdwr_data msg;
 	struct skip_range addr_range = { 0, 0 };
 	int *tokens, fd, error, i, index, j;
 	int len = 0, do_skip = 0, no_range = 1;
+	char buf = 0;
 
 	fd = open(dev, O_RDWR);
 	if (fd == -1) {
@@ -156,7 +160,14 @@ scan_bus(struct iiccmd cmd, char *dev, int skip, char *skip_addr)
 		}
 	}
 
+
 	printf("Scanning I2C devices on %s: ", dev);
+
+	msg.nmsgs = 1;
+	msg.msgs = calloc(1, sizeof(struct iic_msg));
+	msg.msgs->buf = &buf;
+	msg.msgs->len = 1;
+	msg.msgs->flags = IIC_M_RD;
 	for (i = 1; i < 127; i++) {
 
 		if (skip && ( addr_range.start < addr_range.end)) {
@@ -176,31 +187,42 @@ scan_bus(struct iiccmd cmd, char *dev, int skip, char *skip_addr)
 			continue;
 		}
 
-		cmd.slave = i << 1;
-		cmd.last = 1;
-		cmd.count = 0;
-		error = ioctl(fd, I2CRSTCARD, &cmd);
-		if (error)
-			goto out;
+		if (rdrw) {
+			msg.msgs->slave = i << 1;
+			error = ioctl(fd, I2CRDWR, &msg);
+			if (error != -1)
+				printf("%x ", i);
+		} else {
+			cmd.slave = i << 1;
+			cmd.last = 1;
+			cmd.count = 0;
+			error = ioctl(fd, I2CRSTCARD, &cmd);
+			if (error)
+				goto out;
 
-		cmd.slave = i << 1;
-		cmd.last = 1;
-		error = ioctl(fd, I2CSTART, &cmd);
-		if (!error)
-			printf("%x ", i);
-		cmd.slave = i << 1;
-		cmd.last = 1;
-		error = ioctl(fd, I2CSTOP, &cmd);
+			cmd.slave = i << 1;
+			cmd.last = 1;
+			error = ioctl(fd, I2CSTART, &cmd);
+			if (!error)
+				printf("%x ", i);
+			cmd.slave = i << 1;
+			cmd.last = 1;
+			error = ioctl(fd, I2CSTOP, &cmd);
+		}
 	}
 	printf("\n");
 
-	error = ioctl(fd, I2CRSTCARD, &cmd);
+	if (!rdrw)
+		error = ioctl(fd, I2CRSTCARD, &cmd);
 out:
 	close(fd);
 	if (skip && no_range)
 		free(tokens);
 
-	if (error) {
+	if (rdrw)
+		free(msg.msgs);
+	
+	if (!rdrw && error) {
 		fprintf(stderr, "Error scanning I2C controller (%s): %s\n",
 		    dev, strerror(errno));
 		return (EX_NOINPUT);
@@ -465,6 +487,87 @@ err2:
 	return (1);
 }
 
+static int
+i2c_rdrw(char *dev, struct options i2c_opt, char *i2c_buf)
+{
+	struct iic_rdwr_data msgs;
+	int fd, error, i;
+	char *err_msg, ch;
+
+	if (i2c_opt.dir == 'w') {
+		if (i2c_opt.verbose && !i2c_opt.binary)
+			fprintf(stderr, "Enter %u bytes of data: ", i2c_opt.count);
+
+		for (i = 0; i < i2c_opt.count; i++) {
+			ch = getchar();
+			if (ch == EOF) {
+				free(i2c_buf);
+				err(1, "not enough data, exiting\n");
+			}
+			i2c_buf[i] = ch;
+		}
+	}
+
+	fd = open(dev, O_RDWR);
+	if (fd == -1)
+		err(1, "open failed");
+
+	msgs.nmsgs = 1;
+	if (i2c_opt.width) {
+		msgs.nmsgs = 2;
+		msgs.msgs = calloc(2, sizeof(struct iic_msg));
+		msgs.msgs[0].slave = i2c_opt.addr;
+		msgs.msgs[0].len = i2c_opt.width / 8;
+
+		if ((msgs.msgs[0].buf = calloc(msgs.msgs[0].len, sizeof(uint8_t))) == NULL) {
+			err_msg = "can't malloc\n";
+			goto err;
+		}
+		if (msgs.msgs[0].len == 1)
+			msgs.msgs[0].buf[0] = i2c_opt.off & 0xff;
+		else if (msgs.msgs[0].len == 2) {
+			msgs.msgs[0].buf[0] = (i2c_opt.off >> 8) & 0xff;
+			msgs.msgs[0].buf[1] = i2c_opt.off & 0xff;
+		}
+		if (msgs.msgs[0].buf == NULL) {
+			err_msg = "error: offset malloc";
+			goto err;
+		}
+
+		msgs.msgs[0].flags = IIC_M_WR;
+		if (i2c_opt.mode == I2C_MODE_REPEATED_START || i2c_opt.mode == I2C_MODE_NONE)
+			msgs.msgs[0].flags |= IIC_M_NOSTOP;
+	}
+
+	msgs.msgs[msgs.nmsgs - 1].slave = i2c_opt.addr;
+	msgs.msgs[msgs.nmsgs - 1].len = i2c_opt.count;
+	msgs.msgs[msgs.nmsgs - 1].buf = i2c_buf;
+
+	if (i2c_opt.dir == 'r')
+		msgs.msgs[msgs.nmsgs - 1].flags = IIC_M_RD;
+	else
+		msgs.msgs[msgs.nmsgs - 1].flags = IIC_M_WR;
+
+	if (i2c_opt.mode == I2C_MODE_NONE)
+		msgs.msgs[msgs.nmsgs - 1].flags |= IIC_M_NOSTART;
+
+	error = ioctl(fd, I2CRDWR, &msgs);
+	if (error == -1) {
+		err_msg = "error sending i2c frame\n";
+		goto err;
+	}
+
+	close(fd);
+	return (0);
+
+err:
+	if (err_msg)
+		fprintf(stderr, "%s", err_msg);
+
+	close(fd);
+	return (1);
+}
+
 int
 main(int argc, char** argv)
 {
@@ -493,8 +596,9 @@ main(int argc, char** argv)
 	i2c_opt.skip = 0;	/* scan all addresses */
 	i2c_opt.reset = 0;	/* no bus reset */
 	i2c_opt.mode = I2C_MODE_NOTSET;
+	i2c_opt.rdrw = 0;	/* Use read/write by default */
 
-	while ((ch = getopt(argc, argv, "a:f:d:o:w:c:m:n:sbvrh")) != -1) {
+	while ((ch = getopt(argc, argv, "a:f:d:o:w:c:m:n:sbvrhx")) != -1) {
 		switch(ch) {
 		case 'a':
 			i2c_opt.addr = (strtoul(optarg, 0, 16) << 1);
@@ -546,6 +650,9 @@ main(int argc, char** argv)
 		case 'r':
 			i2c_opt.reset = 1;
 			break;
+		case 'x':
+			i2c_opt.rdrw = 1;
+			break;
 		case 'h':
 		default:
 			usage();
@@ -585,7 +692,7 @@ main(int argc, char** argv)
 		    i2c_opt.width, i2c_opt.count);
 
 	if (i2c_opt.scan)
-		exit(scan_bus(cmd, dev, i2c_opt.skip, skip_addr));
+		exit(scan_bus(cmd, i2c_opt.rdrw, dev, i2c_opt.skip, skip_addr));
 
 	if (i2c_opt.reset)
 		exit(reset_bus(cmd, dev));
@@ -594,19 +701,18 @@ main(int argc, char** argv)
 	if (i2c_buf == NULL)
 		err(1, "data malloc");
 
-	if (i2c_opt.dir == 'w') {
-		error = i2c_write(dev, i2c_opt, i2c_buf);
-		if (error) {
-			free(i2c_buf);
-			return (1);
+	if (i2c_opt.rdrw == 1) {
+		error = i2c_rdrw(dev, i2c_opt, i2c_buf);
+	} else {
+		if (i2c_opt.dir == 'w') {
+			error = i2c_write(dev, i2c_opt, i2c_buf);
+		} else if (i2c_opt.dir == 'r') {
+			error = i2c_read(dev, i2c_opt, i2c_buf);
 		}
 	}
-	if (i2c_opt.dir == 'r') {
-		error = i2c_read(dev, i2c_opt, i2c_buf);
-		if (error) {
-			free(i2c_buf);
-			return (1);
-		}
+	if (error) {
+		free(i2c_buf);
+		return (1);
 	}
 
 	if (i2c_opt.verbose)
