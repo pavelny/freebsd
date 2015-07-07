@@ -125,8 +125,8 @@ scan_bus(struct iiccmd cmd, char rdrw, char *dev, int skip, char *skip_addr)
 {
 	struct iic_rdwr_data msg;
 	struct skip_range addr_range = { 0, 0 };
-	int *tokens, fd, error, i, index, j;
-	int len = 0, do_skip = 0, no_range = 1;
+	int *tokens, fd, error, index, i;
+	int len = 0, no_range = 1, row, col, addr, result;
 	char buf = 0;
 
 	fd = open(dev, O_RDWR);
@@ -160,55 +160,72 @@ scan_bus(struct iiccmd cmd, char rdrw, char *dev, int skip, char *skip_addr)
 		}
 	}
 
-
-	printf("Scanning I2C devices on %s: ", dev);
-
 	msg.nmsgs = 1;
-	msg.msgs = calloc(1, sizeof(struct iic_msg));
+	if ((msg.msgs = calloc(1, sizeof(struct iic_msg))) == NULL)
+		errx(1, "%s", strerror(errno));
 	msg.msgs->buf = &buf;
 	msg.msgs->len = 1;
 	msg.msgs->flags = IIC_M_RD;
-	for (i = 1; i < 127; i++) {
 
-		if (skip && ( addr_range.start < addr_range.end)) {
-			if (i >= addr_range.start && i <= addr_range.end)
-				continue;
+	printf("Scanning I2C devices on %s:\n", dev);
+	printf("     0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F\n");
+	for (row = 1; row < 8; row++) {
+		printf("%02X:", row * 16);
+		for (col = 0; col < 16; col++) {
+			addr = (row * 16 + col);
+			result = 0;
 
-		} else if (skip && no_range)
-			for (j = 0; j < index; j++) {
-				if (tokens[j] == i) {
-					do_skip = 1;
-					break;
+			if (skip && ( addr_range.start < addr_range.end)) {
+				if (addr >= addr_range.start && addr <= addr_range.end) {
+					printf(" XX");
+					continue;
 				}
+
+			} else if (skip && no_range)
+				for (i = 0; i < index; i++) {
+					if (tokens[i] == (row * 16) + col) {
+						printf(" XX");
+						continue;
+					}
+				}
+
+			if (rdrw) {
+				msg.msgs->slave = addr << 1;
+				if (ioctl(fd, I2CRDWR, &msg) < 0)
+					result = errno;
+			} else {
+				cmd.slave = addr << 1;
+				cmd.last = 1;
+				cmd.count = 0;
+				if (ioctl(fd, I2CRSTCARD, &cmd) < 0)
+					goto out;
+
+				cmd.slave = addr << 1;
+				cmd.last = 1;
+				if (ioctl(fd, I2CSTART, &cmd) < 0)
+					result = errno;
+				cmd.slave = addr << 1;
+				cmd.last = 1;
+				ioctl(fd, I2CSTOP, &cmd);
 			}
-
-		if (do_skip) {
-			do_skip = 0;
-			continue;
+			switch (result) {
+			case 0:
+				printf(" %02X", addr);
+				break;
+			case EIO:
+			case ENXIO:
+			case ENOENT:
+				printf(" --");
+				break;
+			case EBUSY:
+				printf(" UU");
+				break;
+			default:
+				printf("   ");
+				break;
+			}
 		}
-
-		if (rdrw) {
-			msg.msgs->slave = i << 1;
-			error = ioctl(fd, I2CRDWR, &msg);
-			if (error != -1)
-				printf("%x ", i);
-		} else {
-			cmd.slave = i << 1;
-			cmd.last = 1;
-			cmd.count = 0;
-			error = ioctl(fd, I2CRSTCARD, &cmd);
-			if (error)
-				goto out;
-
-			cmd.slave = i << 1;
-			cmd.last = 1;
-			error = ioctl(fd, I2CSTART, &cmd);
-			if (!error)
-				printf("%x ", i);
-			cmd.slave = i << 1;
-			cmd.last = 1;
-			error = ioctl(fd, I2CSTOP, &cmd);
-		}
+		printf("\n");
 	}
 	printf("\n");
 
@@ -598,10 +615,13 @@ main(int argc, char** argv)
 	i2c_opt.mode = I2C_MODE_NOTSET;
 	i2c_opt.rdrw = 0;	/* Use read/write by default */
 
-	while ((ch = getopt(argc, argv, "a:f:d:o:w:c:m:n:sbvrhx")) != -1) {
+	while ((ch = getopt(argc, argv, "a:A:f:d:o:w:c:m:n:sbvrhx")) != -1) {
 		switch(ch) {
 		case 'a':
-			i2c_opt.addr = (strtoul(optarg, 0, 16) << 1);
+		case 'A':
+			if (i2c_opt.addr_set)
+				usage();
+			i2c_opt.addr = ch == 'a' ? (strtoul(optarg, 0, 16) << 1) : strtoul(optarg, 0, 16);
 			if (i2c_opt.addr == 0 && errno == EINVAL)
 				i2c_opt.addr_set = 0;
 			else
@@ -688,7 +708,7 @@ main(int argc, char** argv)
 	if (i2c_opt.verbose)
 		fprintf(stderr, "dev: %s, addr: 0x%x, r/w: %c, "
 		    "offset: 0x%02x, width: %u, count: %u\n", dev,
-		    i2c_opt.addr >> 1, i2c_opt.dir, i2c_opt.off,
+		    i2c_opt.addr, i2c_opt.dir, i2c_opt.off,
 		    i2c_opt.width, i2c_opt.count);
 
 	if (i2c_opt.scan)

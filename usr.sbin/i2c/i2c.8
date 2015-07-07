@@ -34,7 +34,7 @@
 .Nd test I2C bus and slave devices
 .Sh SYNOPSIS
 .Nm
-.Cm -a Ar address
+.Cm -a|-A Ar address
 .Op Fl f Ar device
 .Op Fl d Ar r|w
 .Op Fl w Ar 0|8|16
@@ -64,6 +64,8 @@ The options are as follows:
 .Bl -tag -width ".Fl d Ar direction"
 .It Fl a Ar address
 7-bit address on the I2C device to operate on (hex).
+.It Fl A Ar address
+8-bit address on the I2C device to operate on (hex).
 .It Fl b
 binary mode - when performing a read operation, the data read from the device
 is output in binary format on stdout; when doing a write, the binary data to
@@ -89,8 +91,19 @@ offset within the device for data transfer (hex).
 reset the controller.
 .It Fl s
 scan the bus for devices.
+It outputs a table of all addresses. The content of each cell can have those meanings:
+.Bl -bullet
+.It
+"--" No chip answered
+.It
+"UU" Chip is in use by a driver
+.It
+"XX" The address was skipped (see -n)
+.It
+An 7-bit address if a chip was found.
+.El
 .It Fl x
-Use the I2CRDRW ioctl instead of the I2C_READ/I2C_WRITE ones.
+Use the I2CRDRW ioctl instead of the I2CREAD/I2CWRITE ones.
 Some newer drivers only support this method.
 .It Fl v
 be verbose.
