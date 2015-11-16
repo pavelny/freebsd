@@ -94,7 +94,6 @@ SDT_PROVIDER_DEFINE(vfs);
 SDT_PROBE_DEFINE2(vfs, , stat, mode, "char *", "int");
 SDT_PROBE_DEFINE2(vfs, , stat, reg, "char *", "int");
 
-static int chroot_refuse_vdir_fds(struct filedesc *fdp);
 static int kern_chflagsat(struct thread *td, int fd, const char *path,
     enum uio_seg pathseg, u_long flags, int atflag);
 static int setfflags(struct thread *td, struct vnode *, u_long);
@@ -728,8 +727,7 @@ sys_fchdir(td, uap)
 		int fd;
 	} */ *uap;
 {
-	register struct filedesc *fdp = td->td_proc->p_fd;
-	struct vnode *vp, *tdp, *vpold;
+	struct vnode *vp, *tdp;
 	struct mount *mp;
 	struct file *fp;
 	cap_rights_t rights;
@@ -761,11 +759,7 @@ sys_fchdir(td, uap)
 		return (error);
 	}
 	VOP_UNLOCK(vp, 0);
-	FILEDESC_XLOCK(fdp);
-	vpold = fdp->fd_cdir;
-	fdp->fd_cdir = vp;
-	FILEDESC_XUNLOCK(fdp);
-	vrele(vpold);
+	pwd_chdir(td, vp);
 	return (0);
 }
 
@@ -791,9 +785,7 @@ sys_chdir(td, uap)
 int
 kern_chdir(struct thread *td, char *path, enum uio_seg pathseg)
 {
-	register struct filedesc *fdp = td->td_proc->p_fd;
 	struct nameidata nd;
-	struct vnode *vp;
 	int error;
 
 	NDINIT(&nd, LOOKUP, FOLLOW | LOCKSHARED | LOCKLEAF | AUDITVNODE1,
@@ -807,54 +799,9 @@ kern_chdir(struct thread *td, char *path, enum uio_seg pathseg)
 	}
 	VOP_UNLOCK(nd.ni_vp, 0);
 	NDFREE(&nd, NDF_ONLY_PNBUF);
-	FILEDESC_XLOCK(fdp);
-	vp = fdp->fd_cdir;
-	fdp->fd_cdir = nd.ni_vp;
-	FILEDESC_XUNLOCK(fdp);
-	vrele(vp);
+	pwd_chdir(td, nd.ni_vp);
 	return (0);
 }
-
-/*
- * Helper function for raised chroot(2) security function:  Refuse if
- * any filedescriptors are open directories.
- */
-static int
-chroot_refuse_vdir_fds(fdp)
-	struct filedesc *fdp;
-{
-	struct vnode *vp;
-	struct file *fp;
-	int fd;
-
-	FILEDESC_LOCK_ASSERT(fdp);
-
-	for (fd = 0; fd <= fdp->fd_lastfile; fd++) {
-		fp = fget_locked(fdp, fd);
-		if (fp == NULL)
-			continue;
-		if (fp->f_type == DTYPE_VNODE) {
-			vp = fp->f_vnode;
-			if (vp->v_type == VDIR)
-				return (EPERM);
-		}
-	}
-	return (0);
-}
-
-/*
- * This sysctl determines if we will allow a process to chroot(2) if it
- * has a directory open:
- *	0: disallowed for all processes.
- *	1: allowed for processes that were not already chroot(2)'ed.
- *	2: allowed for all processes.
- */
-
-static int chroot_allow_open_directories = 1;
-
-SYSCTL_INT(_kern, OID_AUTO, chroot_allow_open_directories, CTLFLAG_RW,
-     &chroot_allow_open_directories, 0,
-     "Allow a process to chroot(2) if it has a directory open");
 
 /*
  * Change notion of root (``/'') directory.
@@ -891,7 +838,7 @@ sys_chroot(td, uap)
 		goto e_vunlock;
 #endif
 	VOP_UNLOCK(nd.ni_vp, 0);
-	error = change_root(nd.ni_vp, td);
+	error = pwd_chroot(td, nd.ni_vp);
 	vrele(nd.ni_vp);
 	NDFREE(&nd, NDF_ONLY_PNBUF);
 	return (error);
@@ -924,42 +871,6 @@ change_dir(vp, td)
 		return (error);
 #endif
 	return (VOP_ACCESS(vp, VEXEC, td->td_ucred, td));
-}
-
-/*
- * Common routine for kern_chroot() and jail_attach().  The caller is
- * responsible for invoking priv_check() and mac_vnode_check_chroot() to
- * authorize this operation.
- */
-int
-change_root(vp, td)
-	struct vnode *vp;
-	struct thread *td;
-{
-	struct filedesc *fdp;
-	struct vnode *oldvp;
-	int error;
-
-	fdp = td->td_proc->p_fd;
-	FILEDESC_XLOCK(fdp);
-	if (chroot_allow_open_directories == 0 ||
-	    (chroot_allow_open_directories == 1 && fdp->fd_rdir != rootvnode)) {
-		error = chroot_refuse_vdir_fds(fdp);
-		if (error != 0) {
-			FILEDESC_XUNLOCK(fdp);
-			return (error);
-		}
-	}
-	oldvp = fdp->fd_rdir;
-	fdp->fd_rdir = vp;
-	VREF(fdp->fd_rdir);
-	if (!fdp->fd_jdir) {
-		fdp->fd_jdir = vp;
-		VREF(fdp->fd_jdir);
-	}
-	FILEDESC_XUNLOCK(fdp);
-	vrele(oldvp);
-	return (0);
 }
 
 static __inline void
@@ -1530,7 +1441,8 @@ kern_linkat(struct thread *td, int fd1, int fd2, char *path1, char *path2,
 
 again:
 	bwillwrite();
-	NDINIT_AT(&nd, LOOKUP, follow | AUDITVNODE1, segflg, path1, fd1, td);
+	NDINIT_ATRIGHTS(&nd, LOOKUP, follow | AUDITVNODE1, segflg, path1, fd1,
+	    cap_rights_init(&rights, CAP_LINKAT_SOURCE), td);
 
 	if ((error = namei(&nd)) != 0)
 		return (error);
@@ -1540,9 +1452,9 @@ again:
 		vrele(vp);
 		return (EPERM);		/* POSIX */
 	}
-	NDINIT_ATRIGHTS(&nd, CREATE, LOCKPARENT | SAVENAME | AUDITVNODE2 |
-	    NOCACHE, segflg, path2, fd2, cap_rights_init(&rights, CAP_LINKAT),
-	    td);
+	NDINIT_ATRIGHTS(&nd, CREATE,
+	    LOCKPARENT | SAVENAME | AUDITVNODE2 | NOCACHE, segflg, path2, fd2,
+	    cap_rights_init(&rights, CAP_LINKAT_TARGET), td);
 	if ((error = namei(&nd)) == 0) {
 		if (nd.ni_vp != NULL) {
 			NDFREE(&nd, NDF_ONLY_PNBUF);
@@ -2248,9 +2160,9 @@ kern_statat(struct thread *td, int flag, int fd, char *path,
 		return (error);
 	error = vn_stat(nd.ni_vp, &sb, td->td_ucred, NOCRED, td);
 	if (error == 0) {
-		SDT_PROBE(vfs, , stat, mode, path, sb.st_mode, 0, 0, 0);
+		SDT_PROBE2(vfs, , stat, mode, path, sb.st_mode);
 		if (S_ISREG(sb.st_mode))
-			SDT_PROBE(vfs, , stat, reg, path, pathseg, 0, 0, 0);
+			SDT_PROBE2(vfs, , stat, reg, path, pathseg);
 		if (__predict_false(hook != NULL))
 			hook(nd.ni_vp, &sb);
 	}
@@ -3550,10 +3462,11 @@ again:
 #ifdef MAC
 	NDINIT_ATRIGHTS(&fromnd, DELETE, LOCKPARENT | LOCKLEAF | SAVESTART |
 	    AUDITVNODE1, pathseg, old, oldfd,
-	    cap_rights_init(&rights, CAP_RENAMEAT), td);
+	    cap_rights_init(&rights, CAP_RENAMEAT_SOURCE), td);
 #else
 	NDINIT_ATRIGHTS(&fromnd, DELETE, WANTPARENT | SAVESTART | AUDITVNODE1,
-	    pathseg, old, oldfd, cap_rights_init(&rights, CAP_RENAMEAT), td);
+	    pathseg, old, oldfd,
+	    cap_rights_init(&rights, CAP_RENAMEAT_SOURCE), td);
 #endif
 
 	if ((error = namei(&fromnd)) != 0)
@@ -3568,7 +3481,7 @@ again:
 	fvp = fromnd.ni_vp;
 	NDINIT_ATRIGHTS(&tond, RENAME, LOCKPARENT | LOCKLEAF | NOCACHE |
 	    SAVESTART | AUDITVNODE2, pathseg, new, newfd,
-	    cap_rights_init(&rights, CAP_LINKAT), td);
+	    cap_rights_init(&rights, CAP_RENAMEAT_TARGET), td);
 	if (fromnd.ni_vp->v_type == VDIR)
 		tond.ni_cnd.cn_flags |= WILLBEDIR;
 	if ((error = namei(&tond)) != 0) {
@@ -4697,8 +4610,6 @@ kern_posix_fadvise(struct thread *td, int fd, off_t offset, off_t len,
 			new->fa_advice = advice;
 			new->fa_start = offset;
 			new->fa_end = end;
-			new->fa_prevstart = 0;
-			new->fa_prevend = 0;
 			fp->f_advice = new;
 			new = fa;
 		}

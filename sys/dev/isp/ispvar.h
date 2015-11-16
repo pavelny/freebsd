@@ -58,7 +58,7 @@
  */
 typedef struct ispsoftc ispsoftc_t;
 struct ispmdvec {
-	int		(*dv_rd_isr) (ispsoftc_t *, uint32_t *, uint16_t *, uint16_t *);
+	int		(*dv_rd_isr) (ispsoftc_t *, uint16_t *, uint16_t *, uint16_t *);
 	uint32_t	(*dv_rd_reg) (ispsoftc_t *, int);
 	void		(*dv_wr_reg) (ispsoftc_t *, int, uint32_t);
 	int		(*dv_mbxdma) (ispsoftc_t *);
@@ -86,8 +86,8 @@ struct ispmdvec {
  * Macros to access ISP registers through bus specific layers-
  * mostly wrappers to vector through the mdvec structure.
  */
-#define	ISP_READ_ISR(isp, isrp, semap, mbox0p)	\
-	(*(isp)->isp_mdvec->dv_rd_isr)(isp, isrp, semap, mbox0p)
+#define	ISP_READ_ISR(isp, isrp, semap, info)	\
+	(*(isp)->isp_mdvec->dv_rd_isr)(isp, isrp, semap, info)
 
 #define	ISP_READ(isp, reg)	\
 	(*(isp)->isp_mdvec->dv_rd_reg)((isp), (reg))
@@ -244,16 +244,13 @@ typedef struct {
 #define	SNS_ID			0x80	/* SNS Server Special ID */
 #define	NPH_MAX			0xfe
 
-/* Use this handle for the base for multi-id firmware SNS logins */
-#define	NPH_SNS_HDLBASE		0x400
-
 /* These are for 2K Login Firmware cards */
 #define	NPH_RESERVED		0x7F0	/* begin of reserved N-port handles */
 #define	NPH_MGT_ID		0x7FA	/* Management Server Special ID */
 #define	NPH_SNS_ID		0x7FC	/* SNS Server Special ID */
 #define	NPH_FABRIC_CTLR		0x7FD	/* Fabric Controller (0xFFFFFD) */
 #define	NPH_FL_ID		0x7FE	/* F Port Special ID (0xFFFFFE) */
-#define	NPH_IP_BCST		0x7ff	/* IP Broadcast Special ID (0xFFFFFF) */
+#define	NPH_IP_BCST		0x7FF	/* IP Broadcast Special ID (0xFFFFFF) */
 #define	NPH_MAX_2K		0x800
 
 /*
@@ -376,9 +373,6 @@ typedef struct {
  *    duples.
  *
  *  + There can never be two non-NIL entries with the same handle.
- *
- *  + There can never be two non-NIL entries which have the same dev_map_idx
- *    value.
  */
 typedef struct {
 	/*
@@ -389,8 +383,6 @@ typedef struct {
 	uint16_t	handle;
 
 	/*
-	 * The dev_map_idx, if nonzero, is the system virtual target ID (+1)
-	 *
 	 * A device is 'autologin' if the firmware automatically logs into
 	 * it (re-logins as needed). Basically, local private loop devices.
 	 *
@@ -398,27 +390,24 @@ typedef struct {
 	 *
 	 * The state is the current state of this entry.
 	 *
+	 * The is_target is the current state of target on this port.
+	 *
+	 * The is_initiator is the current state of initiator on this port.
+	 *
 	 * Portid is obvious, as are node && port WWNs. The new_role and
 	 * new_portid is for when we are pending a change.
-	 *
-	 * The 'target_mode' tag means that this entry arrived via a
-	 * target mode command and is immune from normal flushing rules.
-	 * You should also never see anything with an initiator role
-	 * with this set.
 	 */
 	uint16_t	prli_word3;		/* PRLI parameters */
 	uint16_t	new_prli_word3;		/* Incoming new PRLI parameters */
-	uint16_t	dev_map_idx	: 12,
+	uint16_t			: 12,
 			autologin	: 1,	/* F/W does PLOGI/PLOGO */
 			state		: 3;
-	uint32_t			: 7,
-			target_mode	: 1,
+	uint32_t			: 6,
+			is_target	: 1,
+			is_initiator	: 1,
 			portid		: 24;
 	uint32_t
-					: 5,
-			reported_gone	: 1,
-			announced	: 1,
-			dirty		: 1,	/* commands have been run */
+					: 8,
 			new_portid	: 24;
 	uint64_t	node_wwn;
 	uint64_t	port_wwn;
@@ -434,6 +423,8 @@ typedef struct {
 #define	FC_PORTDB_STATE_ZOMBIE		6
 #define	FC_PORTDB_STATE_VALID		7
 
+#define	FC_PORTDB_TGT(isp, bus, pdb)		(int)(lp - FCPARAM(isp, bus)->portdb)
+
 /*
  * FC card specific information
  *
@@ -442,20 +433,18 @@ typedef struct {
  */
 
 typedef struct {
-	uint32_t
+	int			isp_gbspeed;		/* Connection speed */
+	int			isp_linkstate;		/* Link state */
+	int			isp_fwstate;		/* ISP F/W state */
+	int			isp_loopstate;		/* Loop State */
+	int			isp_topo;		/* Connection Type */
+
+	uint32_t				: 3,
 				fctape_enabled	: 1,
-				link_active	: 1,
 				sendmarker	: 1,
+				loop_seen_once	: 1,
 				role		: 2,
-				isp_gbspeed	: 4,
-				isp_loopstate	: 4,	/* Current Loop State */
-				isp_fwstate	: 4,	/* ISP F/W state */
-				isp_topo	: 3,	/* Connection Type */
-				loop_seen_once	: 1;
-
-	uint32_t				: 8,
 				isp_portid	: 24;	/* S_ID */
-
 
 	uint16_t		isp_fwoptions;
 	uint16_t		isp_xfwoptions;
@@ -484,18 +473,6 @@ typedef struct {
 	 * Our Port Data Base
 	 */
 	fcportdb_t		portdb[MAX_FC_TARG];
-
-#ifdef	ISP_TARGET_MODE
-	/*
-	 * This maps N-Port Handle to portdb entry so we
-	 * don't have to search for every incoming command.
-	 *
-	 * The mapping function is to take any non-zero entry and
-	 * subtract one to get the portdb index. This means that
-	 * entries which are zero are unmapped (i.e., don't exist).
-	 */
-	uint16_t		isp_tgt_map[MAX_NPORT_HANDLE];
-#endif
 
 	/*
 	 * Scratch DMA mapped in area to fetch Port Database stuff, etc.
@@ -840,7 +817,7 @@ void isp_init(ispsoftc_t *);
 /*
  * Reset the ISP and call completion for any orphaned commands.
  */
-void isp_reinit(ispsoftc_t *, int);
+int isp_reinit(ispsoftc_t *, int);
 
 /*
  * Internal Interrupt Service Routine
@@ -849,7 +826,7 @@ void isp_reinit(ispsoftc_t *, int);
  * semaphore register and first mailbox register (if appropriate). This also
  * means that most spurious/bogus interrupts not for us can be filtered first.
  */
-void isp_intr(ispsoftc_t *, uint32_t, uint16_t, uint16_t);
+void isp_intr(ispsoftc_t *, uint16_t, uint16_t, uint16_t);
 
 
 /*

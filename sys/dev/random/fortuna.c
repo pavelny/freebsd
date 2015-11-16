@@ -39,12 +39,11 @@ __FBSDID("$FreeBSD$");
 #ifdef _KERNEL
 #include <sys/param.h>
 #include <sys/kernel.h>
-#include <sys/conf.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
-#include <sys/module.h>
 #include <sys/mutex.h>
 #include <sys/random.h>
+#include <sys/sdt.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 
@@ -60,6 +59,7 @@ __FBSDID("$FreeBSD$");
 #include <dev/random/fortuna.h>
 #else /* !_KERNEL */
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,6 +71,7 @@ __FBSDID("$FreeBSD$");
 #include <crypto/sha2/sha2.h>
 
 #include <dev/random/hash.h>
+#include <dev/random/randomdev.h>
 #include <dev/random/uint128.h>
 #include <dev/random/fortuna.h>
 #endif /* _KERNEL */
@@ -93,6 +94,11 @@ CTASSERT(RANDOM_FORTUNA_DEFPOOLSIZE <= RANDOM_FORTUNA_MAXPOOLSIZE);
 /* This algorithm (and code) presumes that RANDOM_KEYSIZE is twice as large as RANDOM_BLOCKSIZE */
 CTASSERT(RANDOM_BLOCKSIZE == sizeof(uint128_t));
 CTASSERT(RANDOM_KEYSIZE == 2*RANDOM_BLOCKSIZE);
+
+/* Probes for dtrace(1) */
+SDT_PROVIDER_DECLARE(random);
+SDT_PROVIDER_DEFINE(random);
+SDT_PROBE_DEFINE2(random, fortuna, event_processor, debug, "u_int", "struct fs_pool *");
 
 /*
  * This is the beastie that needs protecting. It contains all of the
@@ -125,26 +131,23 @@ static uint8_t zero_region[RANDOM_ZERO_BLOCKSIZE];
 
 static void random_fortuna_pre_read(void);
 static void random_fortuna_read(uint8_t *, u_int);
-static void random_fortuna_post_read(void);
-static void random_fortuna_write(uint8_t *, u_int);
-static void random_fortuna_reseed(void);
-static int random_fortuna_seeded(void);
+static bool random_fortuna_seeded(void);
 static void random_fortuna_process_event(struct harvest_event *);
+static void random_fortuna_init_alg(void *);
+static void random_fortuna_deinit_alg(void *);
 
-#ifdef _KERNEL
-/* Interface to Adaptors system */
+static void random_fortuna_reseed_internal(uint32_t *entropy_data, u_int blockcount);
+
 struct random_algorithm random_alg_context = {
 	.ra_ident = "Fortuna",
+	.ra_init_alg = random_fortuna_init_alg,
+	.ra_deinit_alg = random_fortuna_deinit_alg,
 	.ra_pre_read = random_fortuna_pre_read,
 	.ra_read = random_fortuna_read,
-	.ra_post_read = random_fortuna_post_read,
-	.ra_write = random_fortuna_write,
-	.ra_reseed = random_fortuna_reseed,
 	.ra_seeded = random_fortuna_seeded,
 	.ra_event_processor = random_fortuna_process_event,
 	.ra_poolcount = RANDOM_FORTUNA_NPOOLS,
 };
-#endif
 
 /* ARGSUSED */
 static void
@@ -194,9 +197,6 @@ random_fortuna_init_alg(void *unused __unused)
 	fortuna_state.fs_counter = UINT128_ZERO;
 	explicit_bzero(&fortuna_state.fs_key, sizeof(fortuna_state.fs_key));
 }
-#ifdef _KERNEL
-SYSINIT(random_fortuna, SI_SUB_RANDOM, SI_ORDER_THIRD, random_fortuna_init_alg, NULL);
-#endif
 
 /* ARGSUSED */
 static void
@@ -209,15 +209,12 @@ random_fortuna_deinit_alg(void *unused __unused)
 	sysctl_ctx_free(&random_clist);
 #endif
 }
-#ifdef _KERNEL
-SYSUNINIT(random_fortuna, SI_SUB_RANDOM, SI_ORDER_THIRD, random_fortuna_deinit_alg, NULL);
-#endif
 
 /*-
  * FS&K - AddRandomEvent()
  * Process a single stochastic event off the harvest queue
  */
-void
+static void
 random_fortuna_process_event(struct harvest_event *event)
 {
 	u_int pl;
@@ -248,29 +245,6 @@ random_fortuna_process_event(struct harvest_event *event)
 		fortuna_state.fs_pool[pl].fsp_length = RANDOM_FORTUNA_MAXPOOLSIZE;
 	explicit_bzero(event, sizeof(*event));
 	RANDOM_RESEED_UNLOCK();
-}
-
-/*-
- * Process a block of data suspected to be slightly stochastic.
- * Do this by breaking it up and inserting the pieces as if
- * they were separate events.
- */
-static void
-random_fortuna_process_buffer(uint32_t *buf, u_int wordcount)
-{
-	static struct harvest_event event;
-	static u_int destination = 0;
-	int i;
-
-	for (i = 0; i < wordcount; i += sizeof(event.he_entropy)/sizeof(event.he_entropy[0])) {
-		event.he_somecounter = (uint32_t)get_cyclecount();
-		event.he_size = sizeof(event.he_entropy);
-		event.he_bits = event.he_size/8;
-		event.he_source = RANDOM_CACHED;
-		event.he_destination = destination++; /* Harmless cheating */
-		memcpy(event.he_entropy, buf + i, sizeof(event.he_entropy));
-		random_fortuna_process_event(&event);
-	}
 }
 
 /*-
@@ -358,13 +332,10 @@ random_fortuna_genrandom(uint8_t *buf, u_int bytecount)
 }
 
 /*-
- * FS&K - RandomData()
- * Used to return processed entropy from the PRNG.
- * There is a pre_read and a post_read required to be present
- * (but they can be null functions) in order to allow specific
- * actions at the begin or the end of a read. Fortuna does its
- * reseeding in the _pre_read() part, and _post_read() is not
- * used.
+ * FS&K - RandomData() (Part 1)
+ * Used to return processed entropy from the PRNG. There is a pre_read
+ * required to be present (but it can be a stub) in order to allow
+ * specific actions at the begin of the read.
  */
 void
 random_fortuna_pre_read(void)
@@ -414,16 +385,7 @@ random_fortuna_pre_read(void)
 			} else
 				break;
 		}
-#ifdef RANDOM_DEBUG
-		{
-			u_int j;
-
-			printf("random: reseedcount [%d]", fortuna_state.fs_reseedcount);
-			for (j = 0; j < RANDOM_FORTUNA_NPOOLS; j++)
-				printf(" %X", fortuna_state.fs_pool[j].fsp_length);
-			printf("\n");
-		}
-#endif
+		SDT_PROBE2(random, fortuna, event_processor, debug, fortuna_state.fs_reseedcount, fortuna_state.fs_pool);
 		/* FS&K */
 		random_fortuna_reseed_internal(s, i < RANDOM_FORTUNA_NPOOLS ? i + 1 : RANDOM_FORTUNA_NPOOLS);
 		/* Clean up and secure */
@@ -435,8 +397,10 @@ random_fortuna_pre_read(void)
 }
 
 /*-
- * Main read from Fortuna.
- * The supplied buf MUST be a multiple (>=0) of RANDOM_BLOCKSIZE in size.
+ * FS&K - RandomData() (Part 2)
+ * Main read from Fortuna, continued. May be called multiple times after
+ * the random_fortuna_pre_read() above.
+ * The supplied buf MUST be a multiple of RANDOM_BLOCKSIZE in size.
  * Lots of code presumes this for efficiency, both here and in other
  * routines. You are NOT allowed to break this!
  */
@@ -444,46 +408,13 @@ void
 random_fortuna_read(uint8_t *buf, u_int bytecount)
 {
 
+	KASSERT((bytecount % RANDOM_BLOCKSIZE) == 0, ("%s(): bytecount (= %d) must be a multiple of %d", __func__, bytecount, RANDOM_BLOCKSIZE ));
 	RANDOM_RESEED_LOCK();
 	random_fortuna_genrandom(buf, bytecount);
 	RANDOM_RESEED_UNLOCK();
 }
 
-void
-random_fortuna_post_read(void)
-{
-
-	/* CWOT */
-}
-
-/* Internal function to hand external entropy to the PRNG. */
-void
-random_fortuna_write(uint8_t *buf, u_int count)
-{
-	struct randomdev_hash hash;
-	uint32_t entropy_data[RANDOM_KEYSIZE_WORDS], timestamp;
-
-	/* Extra timing here is helpful to scrape scheduler timing entropy */
-	randomdev_hash_init(&hash);
-	timestamp = (uint32_t)get_cyclecount();
-	randomdev_hash_iterate(&hash, &timestamp, sizeof(timestamp));
-	randomdev_hash_iterate(&hash, buf, count);
-	timestamp = (uint32_t)get_cyclecount();
-	randomdev_hash_iterate(&hash, &timestamp, sizeof(timestamp));
-	randomdev_hash_finish(&hash, entropy_data);
-	explicit_bzero(&hash, sizeof(hash));
-	random_fortuna_process_buffer(entropy_data, sizeof(entropy_data)/sizeof(entropy_data[0]));
-	explicit_bzero(entropy_data, sizeof(entropy_data));
-}
-
-void
-random_fortuna_reseed(void)
-{
-
-	/* CWOT */
-}
-
-int
+bool
 random_fortuna_seeded(void)
 {
 
