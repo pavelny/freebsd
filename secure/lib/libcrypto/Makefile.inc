@@ -3,8 +3,8 @@
 .include <bsd.own.mk>
 
 # OpenSSL version used for manual page generation
-OPENSSL_VER=	1.0.2d
-OPENSSL_DATE=	2015-07-09
+OPENSSL_VER=	1.0.2e
+OPENSSL_DATE=	2015-12-03
 
 LCRYPTO_SRC=	${.CURDIR}/../../../crypto/openssl
 LCRYPTO_DOC=	${LCRYPTO_SRC}/doc
@@ -72,13 +72,13 @@ man-makefile-update:
 	    ${.CURDIR}/Makefile.man
 	for i in ${LCRYPTO_DOC}/${_docs}/*.pod; do \
 		fn=`basename $$i .pod`; \
-		if ! echo ' ${_skip} ' | grep -q " $$fn "; then \
+		if ! echo '${_skip}' | grep -qw "$$fn"; then \
 		${ECHO} "MAN+= $$fn.${_sec}" >> ${.CURDIR}/Makefile.man; \
 		fi; \
 	done
 	for i in ${LCRYPTO_DOC}/${_docs}/*.pod; do \
 		fn=`basename $$i .pod`; \
-		if ! echo ' ${_skip} ' | grep -q " $$fn "; then \
+		if ! echo '${_skip}' | grep -qw "$$fn"; then \
 		perl ${LCRYPTO_SRC}/util/extract-names.pl < $$i | \
 		  awk "/^$$fn\$$/ { next; } \
 		  { print \"MLINKS+= $$fn.${_sec} \" \$$1 \".${_sec}\" }" >> \

@@ -11,6 +11,7 @@ MK_SSP=		no
 
 PROG=		loader.sym
 INTERNALPROG=
+WARNS?=		3
 
 # architecture-specific loader code
 SRCS=	autoload.c \
@@ -67,7 +68,7 @@ HAVE_BCACHE=    yes
 CFLAGS+=	-DEFI_STAGING_SIZE=${EFI_STAGING_SIZE}
 .endif
 
-# Always add MI sources 
+# Always add MI sources
 .PATH:		${.CURDIR}/../../common
 .include	"${.CURDIR}/../../common/Makefile.inc"
 CFLAGS+=	-I${.CURDIR}/../../common

@@ -266,6 +266,7 @@ MAN=	aac.4 \
 	malo.4 \
 	mcd.4 \
 	md.4 \
+	mdio.4 \
 	me.4 \
 	mem.4 \
 	meteor.4 \
@@ -274,6 +275,7 @@ MAN=	aac.4 \
 	mk48txx.4 \
 	mld.4 \
 	mlx.4 \
+	mlx5en.4 \
 	mly.4 \
 	mmc.4 \
 	mmcsd.4 \
@@ -422,6 +424,8 @@ MAN=	aac.4 \
 	rndtest.4 \
 	route.4 \
 	rp.4 \
+	rtwn.4 \
+	rtwnfw.4 \
 	rue.4 \
 	rum.4 \
 	run.4 \
@@ -520,6 +524,7 @@ MAN=	aac.4 \
 	tws.4 \
 	tx.4 \
 	txp.4 \
+	ure.4 \
 	vale.4 \
 	vga.4 \
 	vge.4 \
@@ -652,6 +657,7 @@ MLINKS+=lp.4 plip.4
 MLINKS+=malo.4 if_malo.4
 MLINKS+=md.4 vn.4
 MLINKS+=mem.4 kmem.4
+MLINKS+=mlx5en.4 mce.4
 MLINKS+=mn.4 if_mn.4
 MLINKS+=mos.4 if_mos.4
 MLINKS+=msk.4 if_msk.4
@@ -708,6 +714,7 @@ MLINKS+=tl.4 if_tl.4
 MLINKS+=tun.4 if_tun.4
 MLINKS+=tx.4 if_tx.4
 MLINKS+=txp.4 if_txp.4
+MLINKS+=ure.4 if_ure.4
 MLINKS+=vge.4 if_vge.4
 MLINKS+=vlan.4 if_vlan.4
 MLINKS+=vxlan.4 if_vxlan.4

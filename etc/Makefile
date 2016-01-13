@@ -154,6 +154,9 @@ MTREE=	BSD.debug.dist BSD.include.dist BSD.root.dist BSD.usr.dist BSD.var.dist
 .if ${MK_LIB32} != "no"
 MTREE+=	BSD.lib32.dist
 .endif
+.if ${MK_LIBSOFT} != "no"
+MTREE+=	BSD.libsoft.dist
+.endif
 .if ${MK_TESTS} != "no"
 MTREE+=	BSD.tests.dist
 .endif
@@ -354,6 +357,10 @@ MTREES+=	mtree/BSD.groff.dist		/usr
 MTREES+=	mtree/BSD.lib32.dist		/usr
 MTREES+=	mtree/BSD.lib32.dist		/usr/lib/debug/usr
 .endif
+.if ${MK_LIBSOFT} != "no"
+MTREES+=	mtree/BSD.libsoft.dist		/usr
+MTREES+=	mtree/BSD.libsoft.dist		/usr/lib/debug/usr
+.endif
 .if ${MK_TESTS} != "no"
 MTREES+=	mtree/BSD.tests.dist		${TESTSBASE}
 MTREES+=	mtree/BSD.tests.dist		/usr/lib/debug/${TESTSBASE}
@@ -408,7 +415,7 @@ distrib-dirs: ${MTREES:N/*} distrib-cleanup .PHONY
 		    ${METALOG.add} ; \
 	done; true
 .endif
-	${INSTALL_SYMLINK} ${SRCTOP:C/^\///}/sys ${DESTDIR}/sys
+	${INSTALL_SYMLINK} usr/src/sys ${DESTDIR}/sys
 .if ${MK_MAN} != "no"
 	cd ${DESTDIR}${SHAREDIR}/man; \
 	for mandir in man*; do \
