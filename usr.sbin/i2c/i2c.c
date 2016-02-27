@@ -238,7 +238,7 @@ out:
 
 	if (rdrw)
 		free(msg.msgs);
-	
+
 	if (!rdrw && error) {
 		fprintf(stderr, "Error scanning I2C controller (%s): %s\n",
 		    dev, strerror(errno));
