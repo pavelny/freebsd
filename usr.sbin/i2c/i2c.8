@@ -63,9 +63,9 @@ I2C controller.
 The options are as follows:
 .Bl -tag -width ".Fl d Ar direction"
 .It Fl a Ar address
-7-bit hex address on the I2C device to operate on.
+7-bit hex address on the I2C device.
 .It Fl A Ar address
-8-bit hex address on the I2C device to operate on.
+8-bit hex address on the I2C device.
 .It Fl b
 binary mode - when performing a read operation, the data read from the device
 is output in binary format on stdout; when doing a write, the binary data to
@@ -90,8 +90,8 @@ offset within the device for data transfer (hex).
 .It Fl r
 reset the controller.
 .It Fl s
-scan the bus for devices and print a table of all address.
-The content of each cell can have those meanings:
+scan the bus for devices and print a table of all addresses.
+The content of each cell can have these meanings:
 .Bl -bullet
 .It
 "--" No chip answered
@@ -103,7 +103,7 @@ The content of each cell can have those meanings:
 A 7-bit address of a chip.
 .El
 .It Fl x
-Use I2CRDRW ioctl instead of I2CREAD/I2CWRITE.
+Use the I2CRDRW ioctl instead of I2CREAD/I2CWRITE.
 Some newer drivers only support this method.
 .It Fl v
 be verbose.
