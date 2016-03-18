@@ -1,6 +1,6 @@
 .\"
 .\" Copyright (C) 2008-2009 Semihalf, Michal Hajduk and Bartlomiej Sieka
-.\" Copyright (C) 2015 Emmanuel Vadot <manu@bidouilliste.com>
+.\" Copyright (C) 2015-2016 Emmanuel Vadot <manu@bidouilliste.com>
 .\" All rights reserved.
 .\"
 .\" Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd July 5, 2015
+.Dd March 18, 2016
 .Dt I2C 8
 .Os
 .Sh NAME
@@ -63,9 +63,9 @@ I2C controller.
 The options are as follows:
 .Bl -tag -width ".Fl d Ar direction"
 .It Fl a Ar address
-7-bit address on the I2C device to operate on (hex).
+7-bit hex address on the I2C device to operate on.
 .It Fl A Ar address
-8-bit address on the I2C device to operate on (hex).
+8-bit hex address on the I2C device to operate on.
 .It Fl b
 binary mode - when performing a read operation, the data read from the device
 is output in binary format on stdout; when doing a write, the binary data to
@@ -90,8 +90,8 @@ offset within the device for data transfer (hex).
 .It Fl r
 reset the controller.
 .It Fl s
-scan the bus for devices.
-It outputs a table of all addresses. The content of each cell can have those meanings:
+scan the bus for devices and print a table of all address.
+The content of each cell can have those meanings:
 .Bl -bullet
 .It
 "--" No chip answered
@@ -100,10 +100,10 @@ It outputs a table of all addresses. The content of each cell can have those mea
 .It
 "XX" The address was skipped (see -n)
 .It
-An 7-bit address if a chip was found.
+A 7-bit address of a chip.
 .El
 .It Fl x
-Use the I2CRDRW ioctl instead of the I2CREAD/I2CWRITE ones.
+Use I2CRDRW ioctl instead of I2CREAD/I2CWRITE.
 Some newer drivers only support this method.
 .It Fl v
 be verbose.
