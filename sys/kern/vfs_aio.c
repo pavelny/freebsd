@@ -520,7 +520,6 @@ aio_free_entry(struct kaiocb *job)
 	sigqueue_take(&job->ksi);
 	PROC_UNLOCK(p);
 
-	MPASS(job->bp == NULL);
 	AIO_UNLOCK(ki);
 
 	/*
@@ -743,10 +742,12 @@ aio_process_rw(struct kaiocb *job)
 	struct file *fp;
 	struct uio auio;
 	struct iovec aiov;
-	int cnt;
+	ssize_t cnt;
+	long msgsnd_st, msgsnd_end;
+	long msgrcv_st, msgrcv_end;
+	long oublock_st, oublock_end;
+	long inblock_st, inblock_end;
 	int error;
-	int oublock_st, oublock_end;
-	int inblock_st, inblock_end;
 
 	KASSERT(job->uaiocb.aio_lio_opcode == LIO_READ ||
 	    job->uaiocb.aio_lio_opcode == LIO_WRITE,
@@ -770,8 +771,11 @@ aio_process_rw(struct kaiocb *job)
 	auio.uio_segflg = UIO_USERSPACE;
 	auio.uio_td = td;
 
+	msgrcv_st = td->td_ru.ru_msgrcv;
+	msgsnd_st = td->td_ru.ru_msgsnd;
 	inblock_st = td->td_ru.ru_inblock;
 	oublock_st = td->td_ru.ru_oublock;
+
 	/*
 	 * aio_aqueue() acquires a reference to the file that is
 	 * released in aio_free_entry().
@@ -788,11 +792,15 @@ aio_process_rw(struct kaiocb *job)
 		auio.uio_rw = UIO_WRITE;
 		error = fo_write(fp, &auio, fp->f_cred, FOF_OFFSET, td);
 	}
+	msgrcv_end = td->td_ru.ru_msgrcv;
+	msgsnd_end = td->td_ru.ru_msgsnd;
 	inblock_end = td->td_ru.ru_inblock;
 	oublock_end = td->td_ru.ru_oublock;
 
-	job->inputcharge = inblock_end - inblock_st;
-	job->outputcharge = oublock_end - oublock_st;
+	job->msgrcv = msgrcv_end - msgrcv_st;
+	job->msgsnd = msgsnd_end - msgsnd_st;
+	job->inblock = inblock_end - inblock_st;
+	job->outblock = oublock_end - oublock_st;
 
 	if ((error) && (auio.uio_resid != cnt)) {
 		if (error == ERESTART || error == EINTR || error == EWOULDBLOCK)
@@ -806,7 +814,10 @@ aio_process_rw(struct kaiocb *job)
 
 	cnt -= auio.uio_resid;
 	td->td_ucred = td_savedcred;
-	aio_complete(job, cnt, error);
+	if (error)
+		aio_complete(job, -1, error);
+	else
+		aio_complete(job, cnt, 0);
 }
 
 static void
@@ -824,7 +835,10 @@ aio_process_sync(struct kaiocb *job)
 	if (fp->f_vnode != NULL)
 		error = aio_fsync_vnode(td, fp->f_vnode);
 	td->td_ucred = td_savedcred;
-	aio_complete(job, 0, error);
+	if (error)
+		aio_complete(job, -1, error);
+	else
+		aio_complete(job, 0, 0);
 }
 
 static void
@@ -839,7 +853,10 @@ aio_process_mlock(struct kaiocb *job)
 	aio_switch_vmspace(job);
 	error = vm_mlock(job->userproc, job->cred,
 	    __DEVOLATILE(void *, cb->aio_buf), cb->aio_nbytes);
-	aio_complete(job, 0, error);
+	if (error)
+		aio_complete(job, -1, error);
+	else
+		aio_complete(job, 0, 0);
 }
 
 static void
@@ -1173,7 +1190,7 @@ aio_qphysio(struct proc *p, struct kaiocb *job)
 	struct cdevsw *csw;
 	struct cdev *dev;
 	struct kaioinfo *ki;
-	int error, ref, unmap, poff;
+	int error, ref, poff;
 	vm_prot_t prot;
 
 	cb = &job->uaiocb;
@@ -1206,12 +1223,13 @@ aio_qphysio(struct proc *p, struct kaiocb *job)
 
 	ki = p->p_aioinfo;
 	poff = (vm_offset_t)cb->aio_buf & PAGE_MASK;
-	unmap = ((dev->si_flags & SI_UNMAPPED) && unmapped_buf_allowed);
-	if (unmap) {
+	if ((dev->si_flags & SI_UNMAPPED) && unmapped_buf_allowed) {
 		if (cb->aio_nbytes > MAXPHYS) {
 			error = -1;
 			goto unref;
 		}
+
+		pbuf = NULL;
 	} else {
 		if (cb->aio_nbytes > MAXPHYS - poff) {
 			error = -1;
@@ -1221,18 +1239,14 @@ aio_qphysio(struct proc *p, struct kaiocb *job)
 			error = -1;
 			goto unref;
 		}
-	}
-	job->bp = bp = g_alloc_bio();
-	if (!unmap) {
+
 		job->pbuf = pbuf = (struct buf *)getpbuf(NULL);
 		BUF_KERNPROC(pbuf);
-	} else
-		pbuf = NULL;
-
-	AIO_LOCK(ki);
-	if (!unmap)
+		AIO_LOCK(ki);
 		ki->kaio_buffer_count++;
-	AIO_UNLOCK(ki);
+		AIO_UNLOCK(ki);
+	}
+	job->bp = bp = g_alloc_bio();
 
 	bp->bio_length = cb->aio_nbytes;
 	bp->bio_bcount = cb->aio_nbytes;
@@ -1246,17 +1260,18 @@ aio_qphysio(struct proc *p, struct kaiocb *job)
 	prot = VM_PROT_READ;
 	if (cb->aio_lio_opcode == LIO_READ)
 		prot |= VM_PROT_WRITE;	/* Less backwards than it looks */
-	if ((job->npages = vm_fault_quick_hold_pages(
-	    &curproc->p_vmspace->vm_map,
+	job->npages = vm_fault_quick_hold_pages(&curproc->p_vmspace->vm_map,
 	    (vm_offset_t)bp->bio_data, bp->bio_length, prot, job->pages,
-	    sizeof(job->pages)/sizeof(job->pages[0]))) < 0) {
+	    nitems(job->pages));
+	if (job->npages < 0) {
 		error = EFAULT;
 		goto doerror;
 	}
-	if (!unmap) {
+	if (pbuf != NULL) {
 		pmap_qenter((vm_offset_t)pbuf->b_data,
 		    job->pages, job->npages);
 		bp->bio_data = pbuf->b_data + poff;
+		atomic_add_int(&num_buf_aio, 1);
 	} else {
 		bp->bio_ma = job->pages;
 		bp->bio_ma_n = job->npages;
@@ -1265,20 +1280,16 @@ aio_qphysio(struct proc *p, struct kaiocb *job)
 		bp->bio_flags |= BIO_UNMAPPED;
 	}
 
-	if (!unmap)
-		atomic_add_int(&num_buf_aio, 1);
-
 	/* Perform transfer. */
 	csw->d_strategy(bp);
 	dev_relthread(dev, ref);
 	return (0);
 
 doerror:
-	AIO_LOCK(ki);
-	if (!unmap)
+	if (pbuf != NULL) {
+		AIO_LOCK(ki);
 		ki->kaio_buffer_count--;
-	AIO_UNLOCK(ki);
-	if (pbuf) {
+		AIO_UNLOCK(ki);
 		relpbuf(pbuf, NULL);
 		job->pbuf = NULL;
 	}
@@ -1447,8 +1458,7 @@ aio_aqueue(struct thread *td, struct aiocb *ujob, struct aioliojob *lj,
 		return (error);
 	}
 
-	/* XXX: aio_nbytes is later casted to signed types. */
-	if (job->uaiocb.aio_nbytes > INT_MAX) {
+	if (job->uaiocb.aio_nbytes > IOSIZE_MAX) {
 		uma_zfree(aiocb_zone, job);
 		return (EINVAL);
 	}
@@ -1789,7 +1799,7 @@ kern_aio_return(struct thread *td, struct aiocb *ujob, struct aiocb_ops *ops)
 	struct proc *p = td->td_proc;
 	struct kaiocb *job;
 	struct kaioinfo *ki;
-	int status, error;
+	long status, error;
 
 	ki = p->p_aioinfo;
 	if (ki == NULL)
@@ -1804,13 +1814,10 @@ kern_aio_return(struct thread *td, struct aiocb *ujob, struct aiocb_ops *ops)
 		status = job->uaiocb._aiocb_private.status;
 		error = job->uaiocb._aiocb_private.error;
 		td->td_retval[0] = status;
-		if (job->uaiocb.aio_lio_opcode == LIO_WRITE) {
-			td->td_ru.ru_oublock += job->outputcharge;
-			job->outputcharge = 0;
-		} else if (job->uaiocb.aio_lio_opcode == LIO_READ) {
-			td->td_ru.ru_inblock += job->inputcharge;
-			job->inputcharge = 0;
-		}
+		td->td_ru.ru_oublock += job->outblock;
+		td->td_ru.ru_inblock += job->inblock;
+		td->td_ru.ru_msgsnd += job->msgsnd;
+		td->td_ru.ru_msgrcv += job->msgrcv;
 		aio_free_entry(job);
 		AIO_UNLOCK(ki);
 		ops->store_error(ujob, error);
@@ -2326,11 +2333,14 @@ aio_physwakeup(struct bio *bp)
 		error = bp->bio_error;
 	nblks = btodb(nbytes);
 	if (job->uaiocb.aio_lio_opcode == LIO_WRITE)
-		job->outputcharge += nblks;
+		job->outblock += nblks;
 	else
-		job->inputcharge += nblks;
+		job->inblock += nblks;
 
-	aio_complete(job, nbytes, error);
+	if (error)
+		aio_complete(job, -1, error);
+	else
+		aio_complete(job, nbytes, 0);
 
 	g_destroy_bio(bp);
 }
@@ -2345,7 +2355,8 @@ kern_aio_waitcomplete(struct thread *td, struct aiocb **ujobp,
 	struct kaioinfo *ki;
 	struct kaiocb *job;
 	struct aiocb *ujob;
-	int error, status, timo;
+	long error, status;
+	int timo;
 
 	ops->store_aiocb(ujobp, NULL);
 
@@ -2390,13 +2401,10 @@ kern_aio_waitcomplete(struct thread *td, struct aiocb **ujobp,
 		status = job->uaiocb._aiocb_private.status;
 		error = job->uaiocb._aiocb_private.error;
 		td->td_retval[0] = status;
-		if (job->uaiocb.aio_lio_opcode == LIO_WRITE) {
-			td->td_ru.ru_oublock += job->outputcharge;
-			job->outputcharge = 0;
-		} else if (job->uaiocb.aio_lio_opcode == LIO_READ) {
-			td->td_ru.ru_inblock += job->inputcharge;
-			job->inputcharge = 0;
-		}
+		td->td_ru.ru_oublock += job->outblock;
+		td->td_ru.ru_inblock += job->inblock;
+		td->td_ru.ru_msgsnd += job->msgsnd;
+		td->td_ru.ru_msgrcv += job->msgrcv;
 		aio_free_entry(job);
 		AIO_UNLOCK(ki);
 		ops->store_aiocb(ujobp, ujob);

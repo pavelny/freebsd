@@ -936,7 +936,7 @@ ipfw_chk(struct ip_fw_args *args)
 	 *	offset == 0 means that (if this is an IPv4 packet)
 	 *	this is the first or only fragment.
 	 *	For IPv6 offset|ip6f_mf == 0 means there is no Fragment Header
-	 *	or there is a single packet fragement (fragement header added
+	 *	or there is a single packet fragment (fragment header added
 	 *	without needed).  We will treat a single packet fragment as if
 	 *	there was no fragment header (or log/block depending on the
 	 *	V_fw_permit_single_frag6 sysctl setting).
@@ -1999,7 +1999,7 @@ do {								\
 				 * certainly be inp_user_cookie?
 				 */
 
-				/* For incomming packet, lookup up the 
+				/* For incoming packet, lookup up the 
 				inpcb using the src/dest ip/port tuple */
 				if (inp == NULL) {
 					inp = in_pcblookup(pi, 
@@ -2542,6 +2542,11 @@ do {								\
 				done = 1;	/* exit outer loop */
 				break;
 			}
+			case O_EXTERNAL_ACTION:
+				l = 0; /* in any case exit inner loop */
+				retval = ipfw_run_eaction(chain, args,
+				    cmd, &done);
+				break;
 
 			default:
 				panic("-- unknown opcode %d\n", cmd->opcode);
@@ -2686,7 +2691,6 @@ ipfw_init(void)
 	  default_fw_tables = IPFW_TABLES_MAX;
 
 	ipfw_init_sopt_handler();
-	ipfw_log_bpf(1); /* init */
 	ipfw_iface_init();
 	return (error);
 }
@@ -2699,7 +2703,6 @@ ipfw_destroy(void)
 {
 
 	ipfw_iface_destroy();
-	ipfw_log_bpf(0); /* uninit */
 	ipfw_destroy_sopt_handler();
 	printf("IP firewall unloaded\n");
 }
@@ -2766,6 +2769,7 @@ vnet_ipfw_init(const void *unused)
 
 	IPFW_LOCK_INIT(chain);
 	ipfw_dyn_init(chain);
+	ipfw_eaction_init(chain, first);
 #ifdef LINEAR_SKIPTO
 	ipfw_init_skipto_cache(chain);
 #endif
@@ -2787,6 +2791,7 @@ vnet_ipfw_init(const void *unused)
 	 * is checked on each packet because there are no pfil hooks.
 	 */
 	V_ip_fw_ctl_ptr = ipfw_ctl3;
+	ipfw_log_bpf(1); /* init */
 	error = ipfw_attach_hooks(1);
 	return (error);
 }
@@ -2810,6 +2815,8 @@ vnet_ipfw_uninit(const void *unused)
 	(void)ipfw_attach_hooks(0 /* detach */);
 	V_ip_fw_ctl_ptr = NULL;
 
+	ipfw_log_bpf(0); /* uninit */
+
 	last = IS_DEFAULT_VNET(curvnet) ? 1 : 0;
 
 	IPFW_UH_WLOCK(chain);
@@ -2830,6 +2837,7 @@ vnet_ipfw_uninit(const void *unused)
 	IPFW_WUNLOCK(chain);
 	IPFW_UH_WUNLOCK(chain);
 	ipfw_destroy_tables(chain, last);
+	ipfw_eaction_uninit(chain, last);
 	if (reap != NULL)
 		ipfw_reap_rules(reap);
 	vnet_ipfw_iface_destroy(chain);
@@ -2883,7 +2891,7 @@ static moduledata_t ipfwmod = {
 };
 
 /* Define startup order. */
-#define	IPFW_SI_SUB_FIREWALL	SI_SUB_PROTO_IFATTACHDOMAIN
+#define	IPFW_SI_SUB_FIREWALL	SI_SUB_PROTO_FIREWALL
 #define	IPFW_MODEVENT_ORDER	(SI_ORDER_ANY - 255) /* On boot slot in here. */
 #define	IPFW_MODULE_ORDER	(IPFW_MODEVENT_ORDER + 1) /* A little later. */
 #define	IPFW_VNET_ORDER		(IPFW_MODEVENT_ORDER + 2) /* Later still. */

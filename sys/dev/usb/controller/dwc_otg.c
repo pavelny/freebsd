@@ -2985,7 +2985,8 @@ dwc_otg_interrupt(void *arg)
 		else
 			sc->sc_flags.status_bus_reset = 0;
 
-		if (hprt & HPRT_PRTENCHNG)
+		if ((hprt & HPRT_PRTENCHNG) &&
+		    (hprt & HPRT_PRTENA) == 0)
 			sc->sc_flags.change_enabled = 1;
 
 		if (hprt & HPRT_PRTENA)
@@ -3332,7 +3333,7 @@ dwc_otg_setup_standard_chain(struct usb_xfer *xfer)
 		 * type in general, as a means to workaround
 		 * that. This trick should work for both FULL and LOW
 		 * speed USB traffic going through a TT. For non-TT
-		 * traffic it works aswell. The reason for using
+		 * traffic it works as well. The reason for using
 		 * CONTROL type instead of BULK is that some TTs might
 		 * reject LOW speed BULK traffic.
 		 */
@@ -4745,6 +4746,8 @@ tr_handle_get_port_status:
 
 	value = 0;
 
+	if (sc->sc_flags.change_enabled)
+		value |= UPS_C_PORT_ENABLED;
 	if (sc->sc_flags.change_connect)
 		value |= UPS_C_CONNECT_STATUS;
 	if (sc->sc_flags.change_suspend)

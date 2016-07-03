@@ -160,7 +160,7 @@ userret(struct thread *td, struct trapframe *frame)
 	    ("userret: Returning with with pinned thread"));
 	KASSERT(td->td_vp_reserv == 0,
 	    ("userret: Returning while holding vnode reservation"));
-	KASSERT((td->td_flags & TDF_SBDRY) == 0,
+	KASSERT((td->td_flags & (TDF_SBDRY | TDF_SEINTR | TDF_SERESTART)) == 0,
 	    ("userret: Returning with stop signals deferred"));
 	KASSERT(td->td_su == NULL,
 	    ("userret: Returning with SU cleanup request not handled"));
@@ -172,10 +172,14 @@ userret(struct thread *td, struct trapframe *frame)
 	    (td->td_vnet_lpush != NULL) ? td->td_vnet_lpush : "N/A"));
 #endif
 #ifdef RACCT
-	if (racct_enable && p->p_throttled == 1) {
+	if (racct_enable && p->p_throttled != 0) {
 		PROC_LOCK(p);
-		while (p->p_throttled == 1)
-			msleep(p->p_racct, &p->p_mtx, 0, "racct", 0);
+		while (p->p_throttled != 0) {
+			msleep(p->p_racct, &p->p_mtx, 0, "racct",
+			    p->p_throttled < 0 ? 0 : p->p_throttled);
+			if (p->p_throttled > 0)
+				p->p_throttled = 0;
+		}
 		PROC_UNLOCK(p);
 	}
 #endif

@@ -28,6 +28,7 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include "opt_ddb.h"
 #include "opt_inet.h"
 #include "opt_inet6.h"
 #include "opt_rss.h"
@@ -62,6 +63,10 @@ __FBSDID("$FreeBSD$");
 #if defined(__i386__) || defined(__amd64__)
 #include <vm/vm.h>
 #include <vm/pmap.h>
+#endif
+#ifdef DDB
+#include <ddb/ddb.h>
+#include <ddb/db_lex.h>
 #endif
 
 #include "common/common.h"
@@ -225,6 +230,14 @@ TUNABLE_INT("hw.cxgbe.ntxq1g", &t4_ntxq1g);
 static int t4_nrxq1g = -1;
 TUNABLE_INT("hw.cxgbe.nrxq1g", &t4_nrxq1g);
 
+#define NTXQ_VI 1
+static int t4_ntxq_vi = -1;
+TUNABLE_INT("hw.cxgbe.ntxq_vi", &t4_ntxq_vi);
+
+#define NRXQ_VI 1
+static int t4_nrxq_vi = -1;
+TUNABLE_INT("hw.cxgbe.nrxq_vi", &t4_nrxq_vi);
+
 static int t4_rsrv_noflowq = 0;
 TUNABLE_INT("hw.cxgbe.rsrv_noflowq", &t4_rsrv_noflowq);
 
@@ -244,24 +257,24 @@ TUNABLE_INT("hw.cxgbe.nofldtxq1g", &t4_nofldtxq1g);
 #define NOFLDRXQ_1G 1
 static int t4_nofldrxq1g = -1;
 TUNABLE_INT("hw.cxgbe.nofldrxq1g", &t4_nofldrxq1g);
+
+#define NOFLDTXQ_VI 1
+static int t4_nofldtxq_vi = -1;
+TUNABLE_INT("hw.cxgbe.nofldtxq_vi", &t4_nofldtxq_vi);
+
+#define NOFLDRXQ_VI 1
+static int t4_nofldrxq_vi = -1;
+TUNABLE_INT("hw.cxgbe.nofldrxq_vi", &t4_nofldrxq_vi);
 #endif
 
 #ifdef DEV_NETMAP
-#define NNMTXQ_10G 2
-static int t4_nnmtxq10g = -1;
-TUNABLE_INT("hw.cxgbe.nnmtxq10g", &t4_nnmtxq10g);
+#define NNMTXQ_VI 2
+static int t4_nnmtxq_vi = -1;
+TUNABLE_INT("hw.cxgbe.nnmtxq_vi", &t4_nnmtxq_vi);
 
-#define NNMRXQ_10G 2
-static int t4_nnmrxq10g = -1;
-TUNABLE_INT("hw.cxgbe.nnmrxq10g", &t4_nnmrxq10g);
-
-#define NNMTXQ_1G 1
-static int t4_nnmtxq1g = -1;
-TUNABLE_INT("hw.cxgbe.nnmtxq1g", &t4_nnmtxq1g);
-
-#define NNMRXQ_1G 1
-static int t4_nnmrxq1g = -1;
-TUNABLE_INT("hw.cxgbe.nnmrxq1g", &t4_nnmrxq1g);
+#define NNMRXQ_VI 2
+static int t4_nnmrxq_vi = -1;
+TUNABLE_INT("hw.cxgbe.nnmrxq_vi", &t4_nnmrxq_vi);
 #endif
 
 /*
@@ -382,18 +395,18 @@ struct intrs_and_queues {
 	uint16_t ntxq1g;	/* # of NIC txq's for each 1G port */
 	uint16_t nrxq1g;	/* # of NIC rxq's for each 1G port */
 	uint16_t rsrv_noflowq;	/* Flag whether to reserve queue 0 */
-#ifdef TCP_OFFLOAD
 	uint16_t nofldtxq10g;	/* # of TOE txq's for each 10G port */
 	uint16_t nofldrxq10g;	/* # of TOE rxq's for each 10G port */
 	uint16_t nofldtxq1g;	/* # of TOE txq's for each 1G port */
 	uint16_t nofldrxq1g;	/* # of TOE rxq's for each 1G port */
-#endif
-#ifdef DEV_NETMAP
-	uint16_t nnmtxq10g;	/* # of netmap txq's for each 10G port */
-	uint16_t nnmrxq10g;	/* # of netmap rxq's for each 10G port */
-	uint16_t nnmtxq1g;	/* # of netmap txq's for each 1G port */
-	uint16_t nnmrxq1g;	/* # of netmap rxq's for each 1G port */
-#endif
+
+	/* The vcxgbe/vcxl interfaces use these and not the ones above. */
+	uint16_t ntxq_vi;	/* # of NIC txq's */
+	uint16_t nrxq_vi;	/* # of NIC rxq's */
+	uint16_t nofldtxq_vi;	/* # of TOE txq's */
+	uint16_t nofldrxq_vi;	/* # of TOE rxq's */
+	uint16_t nnmtxq_vi;	/* # of netmap txq's */
+	uint16_t nnmrxq_vi;	/* # of netmap rxq's */
 };
 
 struct filter_entry {
@@ -491,6 +504,7 @@ static int sysctl_tp_la(SYSCTL_HANDLER_ARGS);
 static int sysctl_tx_rate(SYSCTL_HANDLER_ARGS);
 static int sysctl_ulprx_la(SYSCTL_HANDLER_ARGS);
 static int sysctl_wcwr_stats(SYSCTL_HANDLER_ARGS);
+static int sysctl_tc_params(SYSCTL_HANDLER_ARGS);
 #endif
 #ifdef TCP_OFFLOAD
 static int sysctl_tp_tick(SYSCTL_HANDLER_ARGS);
@@ -796,10 +810,10 @@ t4_attach(device_t dev)
 		goto done; /* error message displayed already */
 
 	/*
-	 * Number of VIs to create per-port.  The first VI is the
-	 * "main" regular VI for the port.  The second VI is used for
-	 * netmap if present, and any remaining VIs are used for
-	 * additional virtual interfaces.
+	 * Number of VIs to create per-port.  The first VI is the "main" regular
+	 * VI for the port.  The rest are additional virtual interfaces on the
+	 * same physical port.  Note that the main VI does not have native
+	 * netmap support but the extra VIs do.
 	 *
 	 * Limit the number of VIs per port to the number of available
 	 * MAC addresses per port.
@@ -808,9 +822,6 @@ t4_attach(device_t dev)
 		num_vis = t4_num_vis;
 	else
 		num_vis = 1;
-#ifdef DEV_NETMAP
-	num_vis++;
-#endif
 	if (num_vis > nitems(vi_mac_funcs)) {
 		num_vis = nitems(vi_mac_funcs);
 		device_printf(dev, "Number of VIs limited to %d\n", num_vis);
@@ -825,7 +836,6 @@ t4_attach(device_t dev)
 	n10g = n1g = 0;
 	for_each_port(sc, i) {
 		struct port_info *pi;
-		struct vi_info *vi;
 
 		pi = malloc(sizeof(*pi), M_CXGBE, M_ZERO | M_WAITOK);
 		sc->port[i] = pi;
@@ -833,7 +843,10 @@ t4_attach(device_t dev)
 		/* These must be set before t4_port_init */
 		pi->adapter = sc;
 		pi->port_id = i;
-		pi->nvi = num_vis;
+		/*
+		 * XXX: vi[0] is special so we can't delay this allocation until
+		 * pi->nvi's final value is known.
+		 */
 		pi->vi = malloc(sizeof(struct vi_info) * num_vis, M_CXGBE,
 		    M_ZERO | M_WAITOK);
 
@@ -870,27 +883,16 @@ t4_attach(device_t dev)
 		mtx_init(&pi->pi_lock, pi->lockname, 0, MTX_DEF);
 		sc->chan_map[pi->tx_chan] = i;
 
+		pi->tc = malloc(sizeof(struct tx_sched_class) *
+		    sc->chip_params->nsched_cls, M_CXGBE, M_ZERO | M_WAITOK);
+
 		if (is_10G_port(pi) || is_40G_port(pi)) {
 			n10g++;
-			for_each_vi(pi, j, vi) {
-				vi->tmr_idx = t4_tmr_idx_10g;
-				vi->pktc_idx = t4_pktc_idx_10g;
-			}
 		} else {
 			n1g++;
-			for_each_vi(pi, j, vi) {
-				vi->tmr_idx = t4_tmr_idx_1g;
-				vi->pktc_idx = t4_pktc_idx_1g;
-			}
 		}
 
 		pi->linkdnrc = -1;
-
-		for_each_vi(pi, j, vi) {
-			vi->qsize_rxq = t4_qsize_rxq;
-			vi->qsize_txq = t4_qsize_txq;
-			vi->pi = pi;
-		}
 
 		pi->dev = device_add_child(dev, is_t4(sc) ? "cxgbe" : "cxl", -1);
 		if (pi->dev == NULL) {
@@ -906,12 +908,11 @@ t4_attach(device_t dev)
 	/*
 	 * Interrupt type, # of interrupts, # of rx/tx queues, etc.
 	 */
-#ifdef DEV_NETMAP
-	num_vis--;
-#endif
 	rc = cfg_itype_and_nqueues(sc, n10g, n1g, num_vis, &iaq);
 	if (rc != 0)
 		goto done; /* error message displayed already */
+	if (iaq.nrxq_vi + iaq.nofldrxq_vi + iaq.nnmrxq_vi == 0)
+		num_vis = 1;
 
 	sc->intr_type = iaq.intr_type;
 	sc->intr_count = iaq.nirq;
@@ -920,8 +921,8 @@ t4_attach(device_t dev)
 	s->nrxq = n10g * iaq.nrxq10g + n1g * iaq.nrxq1g;
 	s->ntxq = n10g * iaq.ntxq10g + n1g * iaq.ntxq1g;
 	if (num_vis > 1) {
-		s->nrxq += (n10g + n1g) * (num_vis - 1);
-		s->ntxq += (n10g + n1g) * (num_vis - 1);
+		s->nrxq += (n10g + n1g) * (num_vis - 1) * iaq.nrxq_vi;
+		s->ntxq += (n10g + n1g) * (num_vis - 1) * iaq.ntxq_vi;
 	}
 	s->neq = s->ntxq + s->nrxq;	/* the free list in an rxq is an eq */
 	s->neq += sc->params.nports + 1;/* ctrl queues: 1 per port + 1 mgmt */
@@ -931,8 +932,10 @@ t4_attach(device_t dev)
 		s->nofldrxq = n10g * iaq.nofldrxq10g + n1g * iaq.nofldrxq1g;
 		s->nofldtxq = n10g * iaq.nofldtxq10g + n1g * iaq.nofldtxq1g;
 		if (num_vis > 1) {
-			s->nofldrxq += (n10g + n1g) * (num_vis - 1);
-			s->nofldtxq += (n10g + n1g) * (num_vis - 1);
+			s->nofldrxq += (n10g + n1g) * (num_vis - 1) *
+			    iaq.nofldrxq_vi;
+			s->nofldtxq += (n10g + n1g) * (num_vis - 1) *
+			    iaq.nofldtxq_vi;
 		}
 		s->neq += s->nofldtxq + s->nofldrxq;
 		s->niq += s->nofldrxq;
@@ -944,8 +947,10 @@ t4_attach(device_t dev)
 	}
 #endif
 #ifdef DEV_NETMAP
-	s->nnmrxq = n10g * iaq.nnmrxq10g + n1g * iaq.nnmrxq1g;
-	s->nnmtxq = n10g * iaq.nnmtxq10g + n1g * iaq.nnmtxq1g;
+	if (num_vis > 1) {
+		s->nnmrxq = (n10g + n1g) * (num_vis - 1) * iaq.nnmrxq_vi;
+		s->nnmtxq = (n10g + n1g) * (num_vis - 1) * iaq.nnmtxq_vi;
+	}
 	s->neq += s->nnmtxq + s->nnmrxq;
 	s->niq += s->nnmrxq;
 
@@ -989,61 +994,63 @@ t4_attach(device_t dev)
 		if (pi == NULL)
 			continue;
 
+		pi->nvi = num_vis;
 		for_each_vi(pi, j, vi) {
-#ifdef DEV_NETMAP
-			if (j == 1) {
-				vi->flags |= VI_NETMAP | INTR_RXQ;
-				vi->first_rxq = nm_rqidx;
-				vi->first_txq = nm_tqidx;
-				if (is_10G_port(pi) || is_40G_port(pi)) {
-					vi->nrxq = iaq.nnmrxq10g;
-					vi->ntxq = iaq.nnmtxq10g;
-				} else {
-					vi->nrxq = iaq.nnmrxq1g;
-					vi->ntxq = iaq.nnmtxq1g;
-				}
-				nm_rqidx += vi->nrxq;
-				nm_tqidx += vi->ntxq;
-				continue;
-			}
-#endif
+			vi->pi = pi;
+			vi->qsize_rxq = t4_qsize_rxq;
+			vi->qsize_txq = t4_qsize_txq;
 
 			vi->first_rxq = rqidx;
 			vi->first_txq = tqidx;
 			if (is_10G_port(pi) || is_40G_port(pi)) {
+				vi->tmr_idx = t4_tmr_idx_10g;
+				vi->pktc_idx = t4_pktc_idx_10g;
 				vi->flags |= iaq.intr_flags_10g & INTR_RXQ;
-				vi->nrxq = j == 0 ? iaq.nrxq10g : 1;
-				vi->ntxq = j == 0 ? iaq.ntxq10g : 1;
+				vi->nrxq = j == 0 ? iaq.nrxq10g : iaq.nrxq_vi;
+				vi->ntxq = j == 0 ? iaq.ntxq10g : iaq.ntxq_vi;
 			} else {
+				vi->tmr_idx = t4_tmr_idx_1g;
+				vi->pktc_idx = t4_pktc_idx_1g;
 				vi->flags |= iaq.intr_flags_1g & INTR_RXQ;
-				vi->nrxq = j == 0 ? iaq.nrxq1g : 1;
-				vi->ntxq = j == 0 ? iaq.ntxq1g : 1;
+				vi->nrxq = j == 0 ? iaq.nrxq1g : iaq.nrxq_vi;
+				vi->ntxq = j == 0 ? iaq.ntxq1g : iaq.ntxq_vi;
 			}
+			rqidx += vi->nrxq;
+			tqidx += vi->ntxq;
 
-			if (vi->ntxq > 1)
+			if (j == 0 && vi->ntxq > 1)
 				vi->rsrv_noflowq = iaq.rsrv_noflowq ? 1 : 0;
 			else
 				vi->rsrv_noflowq = 0;
 
-			rqidx += vi->nrxq;
-			tqidx += vi->ntxq;
-
 #ifdef TCP_OFFLOAD
-			if (!is_offload(sc))
-				continue;
 			vi->first_ofld_rxq = ofld_rqidx;
 			vi->first_ofld_txq = ofld_tqidx;
 			if (is_10G_port(pi) || is_40G_port(pi)) {
 				vi->flags |= iaq.intr_flags_10g & INTR_OFLD_RXQ;
-				vi->nofldrxq = j == 0 ? iaq.nofldrxq10g : 1;
-				vi->nofldtxq = j == 0 ? iaq.nofldtxq10g : 1;
+				vi->nofldrxq = j == 0 ? iaq.nofldrxq10g :
+				    iaq.nofldrxq_vi;
+				vi->nofldtxq = j == 0 ? iaq.nofldtxq10g :
+				    iaq.nofldtxq_vi;
 			} else {
 				vi->flags |= iaq.intr_flags_1g & INTR_OFLD_RXQ;
-				vi->nofldrxq = j == 0 ? iaq.nofldrxq1g : 1;
-				vi->nofldtxq = j == 0 ? iaq.nofldtxq1g : 1;
+				vi->nofldrxq = j == 0 ? iaq.nofldrxq1g :
+				    iaq.nofldrxq_vi;
+				vi->nofldtxq = j == 0 ? iaq.nofldtxq1g :
+				    iaq.nofldtxq_vi;
 			}
 			ofld_rqidx += vi->nofldrxq;
 			ofld_tqidx += vi->nofldtxq;
+#endif
+#ifdef DEV_NETMAP
+			if (j > 0) {
+				vi->first_nm_rxq = nm_rqidx;
+				vi->first_nm_txq = nm_tqidx;
+				vi->nnmrxq = iaq.nnmrxq_vi;
+				vi->nnmtxq = iaq.nnmtxq_vi;
+				nm_rqidx += vi->nnmrxq;
+				nm_tqidx += vi->nnmtxq;
+			}
 #endif
 		}
 	}
@@ -1126,6 +1133,7 @@ t4_detach(device_t dev)
 
 			mtx_destroy(&pi->pi_lock);
 			free(pi->vi, M_CXGBE);
+			free(pi->tc, M_CXGBE);
 			free(pi, M_CXGBE);
 		}
 	}
@@ -1265,13 +1273,21 @@ cxgbe_vi_attach(device_t dev, struct vi_info *vi)
 	    EVENTHANDLER_PRI_ANY);
 
 	ether_ifattach(ifp, vi->hw_addr);
-
+#ifdef DEV_NETMAP
+	if (vi->nnmrxq != 0)
+		cxgbe_nm_attach(vi);
+#endif
 	sb = sbuf_new_auto();
 	sbuf_printf(sb, "%d txq, %d rxq (NIC)", vi->ntxq, vi->nrxq);
 #ifdef TCP_OFFLOAD
 	if (ifp->if_capabilities & IFCAP_TOE)
 		sbuf_printf(sb, "; %d txq, %d rxq (TOE)",
 		    vi->nofldtxq, vi->nofldrxq);
+#endif
+#ifdef DEV_NETMAP
+	if (ifp->if_capabilities & IFCAP_NETMAP)
+		sbuf_printf(sb, "; %d txq, %d rxq (netmap)",
+		    vi->nnmtxq, vi->nnmrxq);
 #endif
 	sbuf_finish(sb);
 	device_printf(dev, "%s\n", sbuf_data(sb));
@@ -1298,21 +1314,8 @@ cxgbe_attach(device_t dev)
 	for_each_vi(pi, i, vi) {
 		if (i == 0)
 			continue;
-#ifdef DEV_NETMAP
-		if (vi->flags & VI_NETMAP) {
-			/*
-			 * media handled here to keep
-			 * implementation private to this file
-			 */
-			ifmedia_init(&vi->media, IFM_IMASK, cxgbe_media_change,
-			    cxgbe_media_status);
-			build_medialist(pi, &vi->media);
-			vi->dev = device_add_child(dev, is_t4(pi->adapter) ?
-			    "ncxgbe" : "ncxl", device_get_unit(dev));
-		} else
-#endif
-			vi->dev = device_add_child(dev, is_t4(pi->adapter) ?
-			    "vcxgbe" : "vcxl", -1);
+		vi->dev = device_add_child(dev, is_t4(pi->adapter) ?
+		    "vcxgbe" : "vcxl", -1);
 		if (vi->dev == NULL) {
 			device_printf(dev, "failed to add VI %d\n", i);
 			continue;
@@ -1338,6 +1341,10 @@ cxgbe_vi_detach(struct vi_info *vi)
 		EVENTHANDLER_DEREGISTER(vlan_config, vi->vlan_c);
 
 	/* Let detach proceed even if these fail. */
+#ifdef DEV_NETMAP
+	if (ifp->if_capabilities & IFCAP_NETMAP)
+		cxgbe_nm_detach(vi);
+#endif
 	cxgbe_uninit_synchronized(vi);
 	callout_drain(&vi->tick);
 	vi_full_uninit(vi);
@@ -1700,7 +1707,7 @@ vi_get_counter(struct ifnet *ifp, ift_counter c)
 		uint64_t drops;
 
 		drops = 0;
-		if ((vi->flags & (VI_INIT_DONE | VI_NETMAP)) == VI_INIT_DONE) {
+		if (vi->flags & VI_INIT_DONE) {
 			int i;
 			struct sge_txq *txq;
 
@@ -2123,7 +2130,7 @@ rw_via_memwin(struct adapter *sc, int idx, uint32_t addr, uint32_t *val,
 			} else {
 				v = *val++;
 				t4_write_reg(sc, mw->mw_base + addr -
-				    mw->mw_curpos, htole32(v));;
+				    mw->mw_curpos, htole32(v));
 			}
 			addr += 4;
 			len -= 4;
@@ -2369,28 +2376,29 @@ cfg_itype_and_nqueues(struct adapter *sc, int n10g, int n1g, int num_vis,
 {
 	int rc, itype, navail, nrxq10g, nrxq1g, n;
 	int nofldrxq10g = 0, nofldrxq1g = 0;
-	int nnmrxq10g = 0, nnmrxq1g = 0;
 
 	bzero(iaq, sizeof(*iaq));
 
 	iaq->ntxq10g = t4_ntxq10g;
 	iaq->ntxq1g = t4_ntxq1g;
+	iaq->ntxq_vi = t4_ntxq_vi;
 	iaq->nrxq10g = nrxq10g = t4_nrxq10g;
 	iaq->nrxq1g = nrxq1g = t4_nrxq1g;
+	iaq->nrxq_vi = t4_nrxq_vi;
 	iaq->rsrv_noflowq = t4_rsrv_noflowq;
 #ifdef TCP_OFFLOAD
 	if (is_offload(sc)) {
 		iaq->nofldtxq10g = t4_nofldtxq10g;
 		iaq->nofldtxq1g = t4_nofldtxq1g;
+		iaq->nofldtxq_vi = t4_nofldtxq_vi;
 		iaq->nofldrxq10g = nofldrxq10g = t4_nofldrxq10g;
 		iaq->nofldrxq1g = nofldrxq1g = t4_nofldrxq1g;
+		iaq->nofldrxq_vi = t4_nofldrxq_vi;
 	}
 #endif
 #ifdef DEV_NETMAP
-	iaq->nnmtxq10g = t4_nnmtxq10g;
-	iaq->nnmtxq1g = t4_nnmtxq1g;
-	iaq->nnmrxq10g = nnmrxq10g = t4_nnmrxq10g;
-	iaq->nnmrxq1g = nnmrxq1g = t4_nnmrxq1g;
+	iaq->nnmtxq_vi = t4_nnmtxq_vi;
+	iaq->nnmrxq_vi = t4_nnmrxq_vi;
 #endif
 
 	for (itype = INTR_MSIX; itype; itype >>= 1) {
@@ -2414,14 +2422,17 @@ restart:
 
 		/*
 		 * Best option: an interrupt vector for errors, one for the
-		 * firmware event queue, and one for every rxq (NIC, TOE, and
-		 * netmap).
+		 * firmware event queue, and one for every rxq (NIC and TOE) of
+		 * every VI.  The VIs that support netmap use the same
+		 * interrupts for the NIC rx queues and the netmap rx queues
+		 * because only one set of queues is active at a time.
 		 */
 		iaq->nirq = T4_EXTRA_INTR;
-		iaq->nirq += n10g * (nrxq10g + nofldrxq10g + nnmrxq10g);
-		iaq->nirq += n10g * 2 * (num_vis - 1);
-		iaq->nirq += n1g * (nrxq1g + nofldrxq1g + nnmrxq1g);
-		iaq->nirq += n1g * 2 * (num_vis - 1);
+		iaq->nirq += n10g * (nrxq10g + nofldrxq10g);
+		iaq->nirq += n1g * (nrxq1g + nofldrxq1g);
+		iaq->nirq += (n10g + n1g) * (num_vis - 1) *
+		    max(iaq->nrxq_vi, iaq->nnmrxq_vi);	/* See comment above. */
+		iaq->nirq += (n10g + n1g) * (num_vis - 1) * iaq->nofldrxq_vi;
 		if (iaq->nirq <= navail &&
 		    (itype != INTR_MSI || powerof2(iaq->nirq))) {
 			iaq->intr_flags_10g = INTR_ALL;
@@ -2429,43 +2440,44 @@ restart:
 			goto allocate;
 		}
 
+		/* Disable the VIs (and netmap) if there aren't enough intrs */
+		if (num_vis > 1) {
+			device_printf(sc->dev, "virtual interfaces disabled "
+			    "because num_vis=%u with current settings "
+			    "(nrxq10g=%u, nrxq1g=%u, nofldrxq10g=%u, "
+			    "nofldrxq1g=%u, nrxq_vi=%u nofldrxq_vi=%u, "
+			    "nnmrxq_vi=%u) would need %u interrupts but "
+			    "only %u are available.\n", num_vis, nrxq10g,
+			    nrxq1g, nofldrxq10g, nofldrxq1g, iaq->nrxq_vi,
+			    iaq->nofldrxq_vi, iaq->nnmrxq_vi, iaq->nirq,
+			    navail);
+			num_vis = 1;
+			iaq->ntxq_vi = iaq->nrxq_vi = 0;
+			iaq->nofldtxq_vi = iaq->nofldrxq_vi = 0;
+			iaq->nnmtxq_vi = iaq->nnmrxq_vi = 0;
+			goto restart;
+		}
+
 		/*
 		 * Second best option: a vector for errors, one for the firmware
 		 * event queue, and vectors for either all the NIC rx queues or
 		 * all the TOE rx queues.  The queues that don't get vectors
 		 * will forward their interrupts to those that do.
-		 *
-		 * Note: netmap rx queues cannot be created early and so they
-		 * can't be setup to receive forwarded interrupts for others.
 		 */
 		iaq->nirq = T4_EXTRA_INTR;
 		if (nrxq10g >= nofldrxq10g) {
 			iaq->intr_flags_10g = INTR_RXQ;
 			iaq->nirq += n10g * nrxq10g;
-			iaq->nirq += n10g * (num_vis - 1);
-#ifdef DEV_NETMAP
-			iaq->nnmrxq10g = min(nnmrxq10g, nrxq10g);
-#endif
 		} else {
 			iaq->intr_flags_10g = INTR_OFLD_RXQ;
 			iaq->nirq += n10g * nofldrxq10g;
-#ifdef DEV_NETMAP
-			iaq->nnmrxq10g = min(nnmrxq10g, nofldrxq10g);
-#endif
 		}
 		if (nrxq1g >= nofldrxq1g) {
 			iaq->intr_flags_1g = INTR_RXQ;
 			iaq->nirq += n1g * nrxq1g;
-			iaq->nirq += n1g * (num_vis - 1);
-#ifdef DEV_NETMAP
-			iaq->nnmrxq1g = min(nnmrxq1g, nrxq1g);
-#endif
 		} else {
 			iaq->intr_flags_1g = INTR_OFLD_RXQ;
 			iaq->nirq += n1g * nofldrxq1g;
-#ifdef DEV_NETMAP
-			iaq->nnmrxq1g = min(nnmrxq1g, nofldrxq1g);
-#endif
 		}
 		if (iaq->nirq <= navail &&
 		    (itype != INTR_MSI || powerof2(iaq->nirq)))
@@ -2473,12 +2485,12 @@ restart:
 
 		/*
 		 * Next best option: an interrupt vector for errors, one for the
-		 * firmware event queue, and at least one per VI.  At this
-		 * point we know we'll have to downsize nrxq and/or nofldrxq
-		 * and/or nnmrxq to fit what's available to us.
+		 * firmware event queue, and at least one per main-VI.  At this
+		 * point we know we'll have to downsize nrxq and/or nofldrxq to
+		 * fit what's available to us.
 		 */
 		iaq->nirq = T4_EXTRA_INTR;
-		iaq->nirq += (n10g + n1g) * num_vis;
+		iaq->nirq += n10g + n1g;
 		if (iaq->nirq <= navail) {
 			int leftover = navail - iaq->nirq;
 
@@ -2498,9 +2510,6 @@ restart:
 #ifdef TCP_OFFLOAD
 				iaq->nofldrxq10g = min(n, nofldrxq10g);
 #endif
-#ifdef DEV_NETMAP
-				iaq->nnmrxq10g = min(n, nnmrxq10g);
-#endif
 			}
 
 			if (n1g > 0) {
@@ -2519,9 +2528,6 @@ restart:
 #ifdef TCP_OFFLOAD
 				iaq->nofldrxq1g = min(n, nofldrxq1g);
 #endif
-#ifdef DEV_NETMAP
-				iaq->nnmrxq1g = min(n, nnmrxq1g);
-#endif
 			}
 
 			if (itype != INTR_MSI || powerof2(iaq->nirq))
@@ -2537,10 +2543,6 @@ restart:
 		if (is_offload(sc))
 			iaq->nofldrxq10g = iaq->nofldrxq1g = 1;
 #endif
-#ifdef DEV_NETMAP
-		iaq->nnmrxq10g = iaq->nnmrxq1g = 1;
-#endif
-
 allocate:
 		navail = iaq->nirq;
 		rc = 0;
@@ -3813,6 +3815,7 @@ setup_intr_handlers(struct adapter *sc)
 	struct irq *irq;
 	struct port_info *pi;
 	struct vi_info *vi;
+	struct sge *sge = &sc->sge;
 	struct sge_rxq *rxq;
 #ifdef TCP_OFFLOAD
 	struct sge_ofld_rxq *ofld_rxq;
@@ -3844,7 +3847,7 @@ setup_intr_handlers(struct adapter *sc)
 	rid++;
 
 	/* The second one is always the firmware event queue */
-	rc = t4_alloc_irq(sc, irq, rid, t4_intr_evt, &sc->sge.fwq, "evt");
+	rc = t4_alloc_irq(sc, irq, rid, t4_intr_evt, &sge->fwq, "evt");
 	if (rc != 0)
 		return (rc);
 	irq++;
@@ -3854,29 +3857,37 @@ setup_intr_handlers(struct adapter *sc)
 		pi = sc->port[p];
 		for_each_vi(pi, v, vi) {
 			vi->first_intr = rid - 1;
+
+			if (vi->nnmrxq > 0) {
+				int n = max(vi->nrxq, vi->nnmrxq);
+
+				MPASS(vi->flags & INTR_RXQ);
+
+				rxq = &sge->rxq[vi->first_rxq];
 #ifdef DEV_NETMAP
-			if (vi->flags & VI_NETMAP) {
-				for_each_nm_rxq(vi, q, nm_rxq) {
-					snprintf(s, sizeof(s), "%d-%d", p, q);
+				nm_rxq = &sge->nm_rxq[vi->first_nm_rxq];
+#endif
+				for (q = 0; q < n; q++) {
+					snprintf(s, sizeof(s), "%x%c%x", p,
+					    'a' + v, q);
+					if (q < vi->nrxq)
+						irq->rxq = rxq++;
+#ifdef DEV_NETMAP
+					if (q < vi->nnmrxq)
+						irq->nm_rxq = nm_rxq++;
+#endif
 					rc = t4_alloc_irq(sc, irq, rid,
-					    t4_nm_intr, nm_rxq, s);
+					    t4_vi_intr, irq, s);
 					if (rc != 0)
 						return (rc);
 					irq++;
 					rid++;
 					vi->nintr++;
 				}
-				continue;
-			}
-#endif
-			if (vi->flags & INTR_RXQ) {
+			} else if (vi->flags & INTR_RXQ) {
 				for_each_rxq(vi, q, rxq) {
-					if (v == 0)
-						snprintf(s, sizeof(s), "%d.%d",
-						    p, q);
-					else
-						snprintf(s, sizeof(s),
-						    "%d(%d).%d", p, v, q);
+					snprintf(s, sizeof(s), "%x%c%x", p,
+					    'a' + v, q);
 					rc = t4_alloc_irq(sc, irq, rid,
 					    t4_intr, rxq, s);
 					if (rc != 0)
@@ -3893,7 +3904,8 @@ setup_intr_handlers(struct adapter *sc)
 #ifdef TCP_OFFLOAD
 			if (vi->flags & INTR_OFLD_RXQ) {
 				for_each_ofld_rxq(vi, q, ofld_rxq) {
-					snprintf(s, sizeof(s), "%d,%d", p, q);
+					snprintf(s, sizeof(s), "%x%c%x", p,
+					    'A' + v, q);
 					rc = t4_alloc_irq(sc, irq, rid,
 					    t4_intr, ofld_rxq, s);
 					if (rc != 0)
@@ -4064,14 +4076,6 @@ vi_full_init(struct vi_info *vi)
 	if (rc != 0)
 		goto done;	/* error message displayed already */
 
-#ifdef DEV_NETMAP
-	/* Netmap VIs configure RSS when netmap is enabled. */
-	if (vi->flags & VI_NETMAP) {
-		vi->flags |= VI_INIT_DONE;
-		return (0);
-	}
-#endif
-
 	/*
 	 * Setup RSS for this VI.  Save a copy of the RSS table for later use.
 	 */
@@ -4141,7 +4145,7 @@ vi_full_init(struct vi_info *vi)
 
 	if (extra) {
 		if_printf(ifp,
-		    "global RSS config (0x%x) cannot be accomodated.\n",
+		    "global RSS config (0x%x) cannot be accommodated.\n",
 		    hashconfig);
 	}
 	if (extra & RSS_HASHTYPE_RSS_IPV4)
@@ -4196,10 +4200,6 @@ vi_full_uninit(struct vi_info *vi)
 	if (vi->flags & VI_INIT_DONE) {
 
 		/* Need to quiesce queues.  */
-#ifdef DEV_NETMAP
-		if (vi->flags & VI_NETMAP)
-			goto skip;
-#endif
 
 		/* XXX: Only for the first VI? */
 		if (IS_MAIN_VI(vi))
@@ -4227,10 +4227,8 @@ vi_full_uninit(struct vi_info *vi)
 		}
 #endif
 		free(vi->rss, M_CXGBE);
+		free(vi->nm_rss, M_CXGBE);
 	}
-#ifdef DEV_NETMAP
-skip:
-#endif
 
 	t4_teardown_vi_queues(vi);
 	vi->flags &= ~VI_INIT_DONE;
@@ -4896,15 +4894,6 @@ t4_sysctls(struct adapter *sc)
 		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "ddp", CTLFLAG_RW,
 		    &sc->tt.ddp, 0, "DDP allowed");
 
-		sc->tt.indsz = G_INDICATESIZE(t4_read_reg(sc, A_TP_PARA_REG5));
-		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "indsz", CTLFLAG_RW,
-		    &sc->tt.indsz, 0, "DDP max indicate size allowed");
-
-		sc->tt.ddp_thres =
-		    G_RXCOALESCESIZE(t4_read_reg(sc, A_TP_PARA_REG2));
-		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "ddp_thres", CTLFLAG_RW,
-		    &sc->tt.ddp_thres, 0, "DDP threshold");
-
 		sc->tt.rx_coalesce = 1;
 		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "rx_coalesce",
 		    CTLFLAG_RW, &sc->tt.rx_coalesce, 0, "receive coalescing");
@@ -4974,7 +4963,7 @@ vi_sysctls(struct vi_info *vi)
 	ctx = device_get_sysctl_ctx(vi->dev);
 
 	/*
-	 * dev.[nv](cxgbe|cxl).X.
+	 * dev.v?(cxgbe|cxl).X.
 	 */
 	oid = device_get_sysctl_tree(vi->dev);
 	children = SYSCTL_CHILDREN(oid);
@@ -4990,12 +4979,11 @@ vi_sysctls(struct vi_info *vi)
 	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "first_txq", CTLFLAG_RD,
 	    &vi->first_txq, 0, "index of first tx queue");
 
-	if (vi->flags & VI_NETMAP)
-		return;
-
-	SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "rsrv_noflowq", CTLTYPE_INT |
-	    CTLFLAG_RW, vi, 0, sysctl_noflowq, "IU",
-	    "Reserve queue 0 for non-flowid packets");
+	if (IS_MAIN_VI(vi)) {
+		SYSCTL_ADD_PROC(ctx, children, OID_AUTO, "rsrv_noflowq",
+		    CTLTYPE_INT | CTLFLAG_RW, vi, 0, sysctl_noflowq, "IU",
+		    "Reserve queue 0 for non-flowid packets");
+	}
 
 #ifdef TCP_OFFLOAD
 	if (vi->nofldrxq != 0) {
@@ -5011,6 +4999,20 @@ vi_sysctls(struct vi_info *vi)
 		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "first_ofld_txq",
 		    CTLFLAG_RD, &vi->first_ofld_txq, 0,
 		    "index of first TOE tx queue");
+	}
+#endif
+#ifdef DEV_NETMAP
+	if (vi->nnmrxq != 0) {
+		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "nnmrxq", CTLFLAG_RD,
+		    &vi->nnmrxq, 0, "# of netmap rx queues");
+		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "nnmtxq", CTLFLAG_RD,
+		    &vi->nnmtxq, 0, "# of netmap tx queues");
+		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "first_nm_rxq",
+		    CTLFLAG_RD, &vi->first_nm_rxq, 0,
+		    "index of first netmap rx queue");
+		SYSCTL_ADD_INT(ctx, children, OID_AUTO, "first_nm_txq",
+		    CTLFLAG_RD, &vi->first_nm_txq, 0,
+		    "index of first netmap tx queue");
 	}
 #endif
 
@@ -5034,8 +5036,10 @@ cxgbe_sysctls(struct port_info *pi)
 {
 	struct sysctl_ctx_list *ctx;
 	struct sysctl_oid *oid;
-	struct sysctl_oid_list *children;
+	struct sysctl_oid_list *children, *children2;
 	struct adapter *sc = pi->adapter;
+	int i;
+	char name[16];
 
 	ctx = device_get_sysctl_ctx(pi->dev);
 
@@ -5062,6 +5066,29 @@ cxgbe_sysctls(struct port_info *pi)
 
 	SYSCTL_ADD_INT(ctx, children, OID_AUTO, "max_speed", CTLFLAG_RD, NULL,
 	    port_top_speed(pi), "max speed (in Gbps)");
+
+	/*
+	 * dev.(cxgbe|cxl).X.tc.
+	 */
+	oid = SYSCTL_ADD_NODE(ctx, children, OID_AUTO, "tc", CTLFLAG_RD, NULL,
+	    "Tx scheduler traffic classes");
+	for (i = 0; i < sc->chip_params->nsched_cls; i++) {
+		struct tx_sched_class *tc = &pi->tc[i];
+
+		snprintf(name, sizeof(name), "%d", i);
+		children2 = SYSCTL_CHILDREN(SYSCTL_ADD_NODE(ctx,
+		    SYSCTL_CHILDREN(oid), OID_AUTO, name, CTLFLAG_RD, NULL,
+		    "traffic class"));
+		SYSCTL_ADD_UINT(ctx, children2, OID_AUTO, "flags", CTLFLAG_RD,
+		    &tc->flags, 0, "flags");
+		SYSCTL_ADD_UINT(ctx, children2, OID_AUTO, "refcount",
+		    CTLFLAG_RD, &tc->refcount, 0, "references to this class");
+#ifdef SBUF_DRAIN
+		SYSCTL_ADD_PROC(ctx, children2, OID_AUTO, "params",
+		    CTLTYPE_STRING | CTLFLAG_RD, sc, (pi->port_id << 16) | i,
+		    sysctl_tc_params, "A", "traffic class parameters");
+#endif
+	}
 
 	/*
 	 * dev.cxgbe.X.stats.
@@ -5202,7 +5229,7 @@ cxgbe_sysctls(struct port_info *pi)
 	SYSCTL_ADD_UQUAD(ctx, children, OID_AUTO, #name, CTLFLAG_RD, \
 	    &pi->stats.name, desc)
 
-	/* We get these from port_stats and they may be stale by upto 1s */
+	/* We get these from port_stats and they may be stale by up to 1s */
 	SYSCTL_ADD_T4_PORTSTAT(rx_ovflow0,
 	    "# drops due to buffer-group 0 overflows");
 	SYSCTL_ADD_T4_PORTSTAT(rx_ovflow1,
@@ -7456,6 +7483,101 @@ sysctl_wcwr_stats(SYSCTL_HANDLER_ARGS)
 
 	return (rc);
 }
+
+static int
+sysctl_tc_params(SYSCTL_HANDLER_ARGS)
+{
+	struct adapter *sc = arg1;
+	struct tx_sched_class *tc;
+	struct t4_sched_class_params p;
+	struct sbuf *sb;
+	int i, rc, port_id, flags, mbps, gbps;
+
+	rc = sysctl_wire_old_buffer(req, 0);
+	if (rc != 0)
+		return (rc);
+
+	sb = sbuf_new_for_sysctl(NULL, NULL, 4096, req);
+	if (sb == NULL)
+		return (ENOMEM);
+
+	port_id = arg2 >> 16;
+	MPASS(port_id < sc->params.nports);
+	MPASS(sc->port[port_id] != NULL);
+	i = arg2 & 0xffff;
+	MPASS(i < sc->chip_params->nsched_cls);
+	tc = &sc->port[port_id]->tc[i];
+
+	rc = begin_synchronized_op(sc, NULL, HOLD_LOCK | SLEEP_OK | INTR_OK,
+	    "t4tc_p");
+	if (rc)
+		goto done;
+	flags = tc->flags;
+	p = tc->params;
+	end_synchronized_op(sc, LOCK_HELD);
+
+	if ((flags & TX_SC_OK) == 0) {
+		sbuf_printf(sb, "none");
+		goto done;
+	}
+
+	if (p.level == SCHED_CLASS_LEVEL_CL_WRR) {
+		sbuf_printf(sb, "cl-wrr weight %u", p.weight);
+		goto done;
+	} else if (p.level == SCHED_CLASS_LEVEL_CL_RL)
+		sbuf_printf(sb, "cl-rl");
+	else if (p.level == SCHED_CLASS_LEVEL_CH_RL)
+		sbuf_printf(sb, "ch-rl");
+	else {
+		rc = ENXIO;
+		goto done;
+	}
+
+	if (p.ratemode == SCHED_CLASS_RATEMODE_REL) {
+		/* XXX: top speed or actual link speed? */
+		gbps = port_top_speed(sc->port[port_id]);
+		sbuf_printf(sb, " %u%% of %uGbps", p.maxrate, gbps);
+	}
+	else if (p.ratemode == SCHED_CLASS_RATEMODE_ABS) {
+		switch (p.rateunit) {
+		case SCHED_CLASS_RATEUNIT_BITS:
+			mbps = p.maxrate / 1000;
+			gbps = p.maxrate / 1000000;
+			if (p.maxrate == gbps * 1000000)
+				sbuf_printf(sb, " %uGbps", gbps);
+			else if (p.maxrate == mbps * 1000)
+				sbuf_printf(sb, " %uMbps", mbps);
+			else
+				sbuf_printf(sb, " %uKbps", p.maxrate);
+			break;
+		case SCHED_CLASS_RATEUNIT_PKTS:
+			sbuf_printf(sb, " %upps", p.maxrate);
+			break;
+		default:
+			rc = ENXIO;
+			goto done;
+		}
+	}
+
+	switch (p.mode) {
+	case SCHED_CLASS_MODE_CLASS:
+		sbuf_printf(sb, " aggregate");
+		break;
+	case SCHED_CLASS_MODE_FLOW:
+		sbuf_printf(sb, " per-flow");
+		break;
+	default:
+		rc = ENXIO;
+		goto done;
+	}
+
+done:
+	if (rc == 0)
+		rc = sbuf_finish(sb);
+	sbuf_delete(sb);
+
+	return (rc);
+}
 #endif
 
 #ifdef TCP_OFFLOAD
@@ -8301,152 +8423,144 @@ in_range(int val, int lo, int hi)
 }
 
 static int
-set_sched_class(struct adapter *sc, struct t4_sched_params *p)
+set_sched_class_config(struct adapter *sc, int minmax)
 {
-	int fw_subcmd, fw_type, rc;
+	int rc;
 
-	rc = begin_synchronized_op(sc, NULL, SLEEP_OK | INTR_OK, "t4setsc");
+	if (minmax < 0)
+		return (EINVAL);
+
+	rc = begin_synchronized_op(sc, NULL, SLEEP_OK | INTR_OK, "t4sscc");
 	if (rc)
 		return (rc);
+	rc = -t4_sched_config(sc, FW_SCHED_TYPE_PKTSCHED, minmax, 1);
+	end_synchronized_op(sc, 0);
 
-	if (!(sc->flags & FULL_INIT_DONE)) {
-		rc = EAGAIN;
-		goto done;
-	}
+	return (rc);
+}
+
+static int
+set_sched_class_params(struct adapter *sc, struct t4_sched_class_params *p,
+    int sleep_ok)
+{
+	int rc, top_speed, fw_level, fw_mode, fw_rateunit, fw_ratemode;
+	struct port_info *pi;
+	struct tx_sched_class *tc;
+
+	if (p->level == SCHED_CLASS_LEVEL_CL_RL)
+		fw_level = FW_SCHED_PARAMS_LEVEL_CL_RL;
+	else if (p->level == SCHED_CLASS_LEVEL_CL_WRR)
+		fw_level = FW_SCHED_PARAMS_LEVEL_CL_WRR;
+	else if (p->level == SCHED_CLASS_LEVEL_CH_RL)
+		fw_level = FW_SCHED_PARAMS_LEVEL_CH_RL;
+	else
+		return (EINVAL);
+
+	if (p->mode == SCHED_CLASS_MODE_CLASS)
+		fw_mode = FW_SCHED_PARAMS_MODE_CLASS;
+	else if (p->mode == SCHED_CLASS_MODE_FLOW)
+		fw_mode = FW_SCHED_PARAMS_MODE_FLOW;
+	else
+		return (EINVAL);
+
+	if (p->rateunit == SCHED_CLASS_RATEUNIT_BITS)
+		fw_rateunit = FW_SCHED_PARAMS_UNIT_BITRATE;
+	else if (p->rateunit == SCHED_CLASS_RATEUNIT_PKTS)
+		fw_rateunit = FW_SCHED_PARAMS_UNIT_PKTRATE;
+	else
+		return (EINVAL);
+
+	if (p->ratemode == SCHED_CLASS_RATEMODE_REL)
+		fw_ratemode = FW_SCHED_PARAMS_RATE_REL;
+	else if (p->ratemode == SCHED_CLASS_RATEMODE_ABS)
+		fw_ratemode = FW_SCHED_PARAMS_RATE_ABS;
+	else
+		return (EINVAL);
+
+	/* Vet our parameters ... */
+	if (!in_range(p->channel, 0, sc->chip_params->nchan - 1))
+		return (ERANGE);
+
+	pi = sc->port[sc->chan_map[p->channel]];
+	if (pi == NULL)
+		return (ENXIO);
+	MPASS(pi->tx_chan == p->channel);
+	top_speed = port_top_speed(pi) * 1000000; /* Gbps -> Kbps */
+
+	if (!in_range(p->cl, 0, sc->chip_params->nsched_cls) ||
+	    !in_range(p->minrate, 0, top_speed) ||
+	    !in_range(p->maxrate, 0, top_speed) ||
+	    !in_range(p->weight, 0, 100))
+		return (ERANGE);
 
 	/*
-	 * Translate the cxgbetool parameters into T4 firmware parameters.  (The
-	 * sub-command and type are in common locations.)
+	 * Translate any unset parameters into the firmware's
+	 * nomenclature and/or fail the call if the parameters
+	 * are required ...
 	 */
-	if (p->subcmd == SCHED_CLASS_SUBCMD_CONFIG)
-		fw_subcmd = FW_SCHED_SC_CONFIG;
-	else if (p->subcmd == SCHED_CLASS_SUBCMD_PARAMS)
-		fw_subcmd = FW_SCHED_SC_PARAMS;
+	if (p->rateunit < 0 || p->ratemode < 0 || p->channel < 0 || p->cl < 0)
+		return (EINVAL);
+
+	if (p->minrate < 0)
+		p->minrate = 0;
+	if (p->maxrate < 0) {
+		if (p->level == SCHED_CLASS_LEVEL_CL_RL ||
+		    p->level == SCHED_CLASS_LEVEL_CH_RL)
+			return (EINVAL);
+		else
+			p->maxrate = 0;
+	}
+	if (p->weight < 0) {
+		if (p->level == SCHED_CLASS_LEVEL_CL_WRR)
+			return (EINVAL);
+		else
+			p->weight = 0;
+	}
+	if (p->pktsize < 0) {
+		if (p->level == SCHED_CLASS_LEVEL_CL_RL ||
+		    p->level == SCHED_CLASS_LEVEL_CH_RL)
+			return (EINVAL);
+		else
+			p->pktsize = 0;
+	}
+
+	rc = begin_synchronized_op(sc, NULL,
+	    sleep_ok ? (SLEEP_OK | INTR_OK) : HOLD_LOCK, "t4sscp");
+	if (rc)
+		return (rc);
+	tc = &pi->tc[p->cl];
+	tc->params = *p;
+	rc = -t4_sched_params(sc, FW_SCHED_TYPE_PKTSCHED, fw_level, fw_mode,
+	    fw_rateunit, fw_ratemode, p->channel, p->cl, p->minrate, p->maxrate,
+	    p->weight, p->pktsize, sleep_ok);
+	if (rc == 0)
+		tc->flags |= TX_SC_OK;
 	else {
-		rc = EINVAL;
-		goto done;
-	}
-	if (p->type == SCHED_CLASS_TYPE_PACKET)
-		fw_type = FW_SCHED_TYPE_PKTSCHED;
-	else {
-		rc = EINVAL;
-		goto done;
-	}
-
-	if (fw_subcmd == FW_SCHED_SC_CONFIG) {
-		/* Vet our parameters ..*/
-		if (p->u.config.minmax < 0) {
-			rc = EINVAL;
-			goto done;
-		}
-
-		/* And pass the request to the firmware ...*/
-		rc = -t4_sched_config(sc, fw_type, p->u.config.minmax, 1);
-		goto done;
-	}
-
-	if (fw_subcmd == FW_SCHED_SC_PARAMS) {
-		int fw_level;
-		int fw_mode;
-		int fw_rateunit;
-		int fw_ratemode;
-
-		if (p->u.params.level == SCHED_CLASS_LEVEL_CL_RL)
-			fw_level = FW_SCHED_PARAMS_LEVEL_CL_RL;
-		else if (p->u.params.level == SCHED_CLASS_LEVEL_CL_WRR)
-			fw_level = FW_SCHED_PARAMS_LEVEL_CL_WRR;
-		else if (p->u.params.level == SCHED_CLASS_LEVEL_CH_RL)
-			fw_level = FW_SCHED_PARAMS_LEVEL_CH_RL;
-		else {
-			rc = EINVAL;
-			goto done;
-		}
-
-		if (p->u.params.mode == SCHED_CLASS_MODE_CLASS)
-			fw_mode = FW_SCHED_PARAMS_MODE_CLASS;
-		else if (p->u.params.mode == SCHED_CLASS_MODE_FLOW)
-			fw_mode = FW_SCHED_PARAMS_MODE_FLOW;
-		else {
-			rc = EINVAL;
-			goto done;
-		}
-
-		if (p->u.params.rateunit == SCHED_CLASS_RATEUNIT_BITS)
-			fw_rateunit = FW_SCHED_PARAMS_UNIT_BITRATE;
-		else if (p->u.params.rateunit == SCHED_CLASS_RATEUNIT_PKTS)
-			fw_rateunit = FW_SCHED_PARAMS_UNIT_PKTRATE;
-		else {
-			rc = EINVAL;
-			goto done;
-		}
-
-		if (p->u.params.ratemode == SCHED_CLASS_RATEMODE_REL)
-			fw_ratemode = FW_SCHED_PARAMS_RATE_REL;
-		else if (p->u.params.ratemode == SCHED_CLASS_RATEMODE_ABS)
-			fw_ratemode = FW_SCHED_PARAMS_RATE_ABS;
-		else {
-			rc = EINVAL;
-			goto done;
-		}
-
-		/* Vet our parameters ... */
-		if (!in_range(p->u.params.channel, 0, 3) ||
-		    !in_range(p->u.params.cl, 0, sc->chip_params->nsched_cls) ||
-		    !in_range(p->u.params.minrate, 0, 10000000) ||
-		    !in_range(p->u.params.maxrate, 0, 10000000) ||
-		    !in_range(p->u.params.weight, 0, 100)) {
-			rc = ERANGE;
-			goto done;
-		}
-
 		/*
-		 * Translate any unset parameters into the firmware's
-		 * nomenclature and/or fail the call if the parameters
-		 * are required ...
+		 * Unknown state at this point, see tc->params for what was
+		 * attempted.
 		 */
-		if (p->u.params.rateunit < 0 || p->u.params.ratemode < 0 ||
-		    p->u.params.channel < 0 || p->u.params.cl < 0) {
-			rc = EINVAL;
-			goto done;
-		}
-		if (p->u.params.minrate < 0)
-			p->u.params.minrate = 0;
-		if (p->u.params.maxrate < 0) {
-			if (p->u.params.level == SCHED_CLASS_LEVEL_CL_RL ||
-			    p->u.params.level == SCHED_CLASS_LEVEL_CH_RL) {
-				rc = EINVAL;
-				goto done;
-			} else
-				p->u.params.maxrate = 0;
-		}
-		if (p->u.params.weight < 0) {
-			if (p->u.params.level == SCHED_CLASS_LEVEL_CL_WRR) {
-				rc = EINVAL;
-				goto done;
-			} else
-				p->u.params.weight = 0;
-		}
-		if (p->u.params.pktsize < 0) {
-			if (p->u.params.level == SCHED_CLASS_LEVEL_CL_RL ||
-			    p->u.params.level == SCHED_CLASS_LEVEL_CH_RL) {
-				rc = EINVAL;
-				goto done;
-			} else
-				p->u.params.pktsize = 0;
-		}
-
-		/* See what the firmware thinks of the request ... */
-		rc = -t4_sched_params(sc, fw_type, fw_level, fw_mode,
-		    fw_rateunit, fw_ratemode, p->u.params.channel,
-		    p->u.params.cl, p->u.params.minrate, p->u.params.maxrate,
-		    p->u.params.weight, p->u.params.pktsize, 1);
-		goto done;
+		tc->flags &= ~TX_SC_OK;
 	}
+	end_synchronized_op(sc, sleep_ok ? 0 : LOCK_HELD);
 
-	rc = EINVAL;
-done:
-	end_synchronized_op(sc, 0);
 	return (rc);
+}
+
+static int
+set_sched_class(struct adapter *sc, struct t4_sched_params *p)
+{
+
+	if (p->type != SCHED_CLASS_TYPE_PACKET)
+		return (EINVAL);
+
+	if (p->subcmd == SCHED_CLASS_SUBCMD_CONFIG)
+		return (set_sched_class_config(sc, p->u.config.minmax));
+
+	if (p->subcmd == SCHED_CLASS_SUBCMD_PARAMS)
+		return (set_sched_class_params(sc, &p->u.params, 1));
+
+	return (EINVAL);
 }
 
 static int
@@ -8462,11 +8576,6 @@ set_sched_queue(struct adapter *sc, struct t4_sched_queue *p)
 	if (rc)
 		return (rc);
 
-	if (!(sc->flags & FULL_INIT_DONE)) {
-		rc = EAGAIN;
-		goto done;
-	}
-
 	if (p->port >= sc->params.nports) {
 		rc = EINVAL;
 		goto done;
@@ -8475,7 +8584,14 @@ set_sched_queue(struct adapter *sc, struct t4_sched_queue *p)
 	/* XXX: Only supported for the main VI. */
 	pi = sc->port[p->port];
 	vi = &pi->vi[0];
-	if (!in_range(p->queue, 0, vi->ntxq - 1) || !in_range(p->cl, 0, 7)) {
+	if (!(vi->flags & VI_INIT_DONE)) {
+		/* tx queues not set up yet */
+		rc = EAGAIN;
+		goto done;
+	}
+
+	if (!in_range(p->queue, 0, vi->ntxq - 1) ||
+	    !in_range(p->cl, 0, sc->chip_params->nsched_cls - 1)) {
 		rc = EINVAL;
 		goto done;
 	}
@@ -8756,9 +8872,6 @@ t4_ioctl(struct cdev *dev, unsigned long cmd, caddr_t data, int fflag,
 				struct sge_txq *txq;
 				struct sge_wrq *wrq;
 
-				if (vi->flags & VI_NETMAP)
-					continue;
-
 				for_each_rxq(vi, i, rxq) {
 #if defined(INET) || defined(INET6)
 					rxq->lro.lro_queued = 0;
@@ -8868,12 +8981,12 @@ toe_capability(struct vi_info *vi, int enable)
 		 * port has never been UP'd administratively.
 		 */
 		if (!(vi->flags & VI_INIT_DONE)) {
-			rc = cxgbe_init_synchronized(vi);
+			rc = vi_full_init(vi);
 			if (rc)
 				return (rc);
 		}
 		if (!(pi->vi[0].flags & VI_INIT_DONE)) {
-			rc = cxgbe_init_synchronized(&pi->vi[0]);
+			rc = vi_full_init(&pi->vi[0]);
 			if (rc)
 				return (rc);
 		}
@@ -9072,6 +9185,9 @@ tweak_tunables(void)
 #endif
 	}
 
+	if (t4_ntxq_vi < 1)
+		t4_ntxq_vi = min(nc, NTXQ_VI);
+
 	if (t4_nrxq10g < 1) {
 #ifdef RSS
 		t4_nrxq10g = rss_getnumbuckets();
@@ -9089,6 +9205,9 @@ tweak_tunables(void)
 #endif
 	}
 
+	if (t4_nrxq_vi < 1)
+		t4_nrxq_vi = min(nc, NRXQ_VI);
+
 #ifdef TCP_OFFLOAD
 	if (t4_nofldtxq10g < 1)
 		t4_nofldtxq10g = min(nc, NOFLDTXQ_10G);
@@ -9096,11 +9215,17 @@ tweak_tunables(void)
 	if (t4_nofldtxq1g < 1)
 		t4_nofldtxq1g = min(nc, NOFLDTXQ_1G);
 
+	if (t4_nofldtxq_vi < 1)
+		t4_nofldtxq_vi = min(nc, NOFLDTXQ_VI);
+
 	if (t4_nofldrxq10g < 1)
 		t4_nofldrxq10g = min(nc, NOFLDRXQ_10G);
 
 	if (t4_nofldrxq1g < 1)
 		t4_nofldrxq1g = min(nc, NOFLDRXQ_1G);
+
+	if (t4_nofldrxq_vi < 1)
+		t4_nofldrxq_vi = min(nc, NOFLDRXQ_VI);
 
 	if (t4_toecaps_allowed == -1)
 		t4_toecaps_allowed = FW_CAPS_CONFIG_TOE;
@@ -9127,17 +9252,11 @@ tweak_tunables(void)
 #endif
 
 #ifdef DEV_NETMAP
-	if (t4_nnmtxq10g < 1)
-		t4_nnmtxq10g = min(nc, NNMTXQ_10G);
+	if (t4_nnmtxq_vi < 1)
+		t4_nnmtxq_vi = min(nc, NNMTXQ_VI);
 
-	if (t4_nnmtxq1g < 1)
-		t4_nnmtxq1g = min(nc, NNMTXQ_1G);
-
-	if (t4_nnmrxq10g < 1)
-		t4_nnmrxq10g = min(nc, NNMRXQ_10G);
-
-	if (t4_nnmrxq1g < 1)
-		t4_nnmrxq1g = min(nc, NNMRXQ_1G);
+	if (t4_nnmrxq_vi < 1)
+		t4_nnmrxq_vi = min(nc, NNMRXQ_VI);
 #endif
 
 	if (t4_tmr_idx_10g < 0 || t4_tmr_idx_10g >= SGE_NTIMERS)
@@ -9162,6 +9281,179 @@ tweak_tunables(void)
 
 	t4_intr_types &= INTR_MSIX | INTR_MSI | INTR_INTX;
 }
+
+#ifdef DDB
+static void
+t4_dump_tcb(struct adapter *sc, int tid)
+{
+	uint32_t base, i, j, off, pf, reg, save, tcb_addr, win_pos;
+
+	reg = PCIE_MEM_ACCESS_REG(A_PCIE_MEM_ACCESS_OFFSET, 2);
+	save = t4_read_reg(sc, reg);
+	base = sc->memwin[2].mw_base;
+
+	/* Dump TCB for the tid */
+	tcb_addr = t4_read_reg(sc, A_TP_CMM_TCB_BASE);
+	tcb_addr += tid * TCB_SIZE;
+
+	if (is_t4(sc)) {
+		pf = 0;
+		win_pos = tcb_addr & ~0xf;	/* start must be 16B aligned */
+	} else {
+		pf = V_PFNUM(sc->pf);
+		win_pos = tcb_addr & ~0x7f;	/* start must be 128B aligned */
+	}
+	t4_write_reg(sc, reg, win_pos | pf);
+	t4_read_reg(sc, reg);
+
+	off = tcb_addr - win_pos;
+	for (i = 0; i < 4; i++) {
+		uint32_t buf[8];
+		for (j = 0; j < 8; j++, off += 4)
+			buf[j] = htonl(t4_read_reg(sc, base + off));
+
+		db_printf("%08x %08x %08x %08x %08x %08x %08x %08x\n",
+		    buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6],
+		    buf[7]);
+	}
+
+	t4_write_reg(sc, reg, save);
+	t4_read_reg(sc, reg);
+}
+
+static void
+t4_dump_devlog(struct adapter *sc)
+{
+	struct devlog_params *dparams = &sc->params.devlog;
+	struct fw_devlog_e e;
+	int i, first, j, m, nentries, rc;
+	uint64_t ftstamp = UINT64_MAX;
+
+	if (dparams->start == 0) {
+		db_printf("devlog params not valid\n");
+		return;
+	}
+
+	nentries = dparams->size / sizeof(struct fw_devlog_e);
+	m = fwmtype_to_hwmtype(dparams->memtype);
+
+	/* Find the first entry. */
+	first = -1;
+	for (i = 0; i < nentries && !db_pager_quit; i++) {
+		rc = -t4_mem_read(sc, m, dparams->start + i * sizeof(e),
+		    sizeof(e), (void *)&e);
+		if (rc != 0)
+			break;
+
+		if (e.timestamp == 0)
+			break;
+
+		e.timestamp = be64toh(e.timestamp);
+		if (e.timestamp < ftstamp) {
+			ftstamp = e.timestamp;
+			first = i;
+		}
+	}
+
+	if (first == -1)
+		return;
+
+	i = first;
+	do {
+		rc = -t4_mem_read(sc, m, dparams->start + i * sizeof(e),
+		    sizeof(e), (void *)&e);
+		if (rc != 0)
+			return;
+
+		if (e.timestamp == 0)
+			return;
+
+		e.timestamp = be64toh(e.timestamp);
+		e.seqno = be32toh(e.seqno);
+		for (j = 0; j < 8; j++)
+			e.params[j] = be32toh(e.params[j]);
+
+		db_printf("%10d  %15ju  %8s  %8s  ",
+		    e.seqno, e.timestamp,
+		    (e.level < nitems(devlog_level_strings) ?
+			devlog_level_strings[e.level] : "UNKNOWN"),
+		    (e.facility < nitems(devlog_facility_strings) ?
+			devlog_facility_strings[e.facility] : "UNKNOWN"));
+		db_printf(e.fmt, e.params[0], e.params[1], e.params[2],
+		    e.params[3], e.params[4], e.params[5], e.params[6],
+		    e.params[7]);
+
+		if (++i == nentries)
+			i = 0;
+	} while (i != first && !db_pager_quit);
+}
+
+static struct command_table db_t4_table = LIST_HEAD_INITIALIZER(db_t4_table);
+_DB_SET(_show, t4, NULL, db_show_table, 0, &db_t4_table);
+
+DB_FUNC(devlog, db_show_devlog, db_t4_table, CS_OWN, NULL)
+{
+	device_t dev;
+	int t;
+	bool valid;
+
+	valid = false;
+	t = db_read_token();
+	if (t == tIDENT) {
+		dev = device_lookup_by_name(db_tok_string);
+		valid = true;
+	}
+	db_skip_to_eol();
+	if (!valid) {
+		db_printf("usage: show t4 devlog <nexus>\n");
+		return;
+	}
+
+	if (dev == NULL) {
+		db_printf("device not found\n");
+		return;
+	}
+
+	t4_dump_devlog(device_get_softc(dev));
+}
+
+DB_FUNC(tcb, db_show_t4tcb, db_t4_table, CS_OWN, NULL)
+{
+	device_t dev;
+	int radix, tid, t;
+	bool valid;
+
+	valid = false;
+	radix = db_radix;
+	db_radix = 10;
+	t = db_read_token();
+	if (t == tIDENT) {
+		dev = device_lookup_by_name(db_tok_string);
+		t = db_read_token();
+		if (t == tNUMBER) {
+			tid = db_tok_number;
+			valid = true;
+		}
+	}	
+	db_radix = radix;
+	db_skip_to_eol();
+	if (!valid) {
+		db_printf("usage: show t4 tcb <nexus> <tid>\n");
+		return;
+	}
+
+	if (dev == NULL) {
+		db_printf("device not found\n");
+		return;
+	}
+	if (tid < 0) {
+		db_printf("invalid tid\n");
+		return;
+	}
+
+	t4_dump_tcb(device_get_softc(dev), tid);
+}
+#endif
 
 static struct sx mlu;	/* mod load unload */
 SX_SYSINIT(cxgbe_mlu, &mlu, "cxgbe mod load/unload");
